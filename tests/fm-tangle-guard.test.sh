@@ -301,9 +301,64 @@ test_spawn_tmux_window_construction() {
   pass "fm-spawn: appends windows by session-colon, pins the name, and targets the window id"
 }
 
+# --- GUARD 1d: fm-spawn hardened lease-shape checks -------------------------
+
+# The atelier incident: treehouse's pool exhausted, so `treehouse get` fell
+# back to returning a live checkout distinct from PROJ_ABS but not an isolated
+# pooled lease - on a named branch, dirty, and itself anchoring linked
+# worktrees. GUARD 1b's checks alone (distinct + own-toplevel) would have
+# passed it. These cases pin the three added lease-shape checks independently,
+# plus that a genuine fresh pooled lease still sails through.
+test_spawn_isolation_abort_unpooled_checkout() {
+  local home proj fakebin out status
+  local branch_repo dirty_repo nested_repo nested_child
+  home="$TMP_ROOT/spawn-home2"
+  mkdir -p "$home/data"
+  proj=$(make_repo "$TMP_ROOT/spawn-proj2")
+  fakebin=$(make_spawn_fakebin "$TMP_ROOT/spawn-fake2")
+
+  # A live checkout on a named branch: not the pool's detached-HEAD lease shape.
+  branch_repo=$(make_repo "$TMP_ROOT/live-branch-repo")
+  git -C "$branch_repo" checkout -q -B some-feature
+
+  # A live checkout detached on the default branch, but with uncommitted changes.
+  dirty_repo=$(make_repo "$TMP_ROOT/live-dirty-repo")
+  git -C "$dirty_repo" checkout -q --detach
+  echo dirty > "$dirty_repo/dirty.txt"
+
+  # A live checkout that itself anchors a linked worktree of its own (the
+  # atelier shape), clean and detached so only the nested-ownership check trips.
+  nested_repo=$(make_repo "$TMP_ROOT/live-nested-repo")
+  nested_child="$TMP_ROOT/live-nested-child"
+  git -C "$nested_repo" checkout -q --detach
+  git -C "$nested_repo" worktree add -q --detach "$nested_child" >/dev/null 2>&1
+
+  out=$(run_spawn "$home" abort-branch-gg7 "$proj" "$branch_repo" "$fakebin"); status=$?
+  expect_code 1 "$status" "spawn onto a named-branch live checkout should abort"
+  assert_contains "$out" "did not yield an isolated worktree" "named-branch live checkout lacked the isolation error"
+  assert_contains "$out" "some-feature" "named-branch abort did not name the offending branch"
+
+  out=$(run_spawn "$home" abort-dirty-hh8 "$proj" "$dirty_repo" "$fakebin"); status=$?
+  expect_code 1 "$status" "spawn onto a dirty live checkout should abort"
+  assert_contains "$out" "did not yield an isolated worktree" "dirty live checkout lacked the isolation error"
+
+  out=$(run_spawn "$home" abort-nested-ii9 "$proj" "$nested_repo" "$fakebin"); status=$?
+  expect_code 1 "$status" "spawn onto a checkout owning its own linked worktree should abort"
+  assert_contains "$out" "did not yield an isolated worktree" "nested-worktree live checkout lacked the isolation error"
+
+  # A genuine fresh pooled lease of the SAME project still sails through.
+  git -C "$proj" worktree add -q --detach "$TMP_ROOT/spawn-wt2" >/dev/null 2>&1
+  out=$(run_spawn "$home" ok-pooled-jj0 "$proj" "$TMP_ROOT/spawn-wt2" "$fakebin"); status=$?
+  expect_code 0 "$status" "spawn into a genuine isolated pooled worktree should still succeed"
+  assert_contains "$out" "spawned ok-pooled-jj0" "genuine pooled worktree spawn did not report success"
+  assert_not_contains "$out" "did not yield an isolated worktree" "genuine pooled worktree spawn wrongly tripped the hardened guard"
+  pass "fm-spawn: hardened isolation guard refuses a dirty / named-branch / nested-worktree live checkout and still accepts a clean detached-HEAD pooled worktree"
+}
+
 test_lib_classification
 test_guard_banner
 test_bootstrap_line
 test_brief_assertion_precedes_branch
 test_spawn_isolation_abort
 test_spawn_tmux_window_construction
+test_spawn_isolation_abort_unpooled_checkout

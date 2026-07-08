@@ -674,8 +674,35 @@ real_path_or_raw() {  # <path>
 # herdr-sm-spaces-k4). Both branches converge on the same $T ("target") string
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
+# Resolve one of `git rev-parse --git-dir`/`--git-common-dir` (run with <base-dir>
+# as cwd, so a relative result is relative to it) to a canonical absolute path.
+# Echoes nothing and returns 1 if the raw value is empty or unresolvable.
+resolve_git_meta_dir() {  # <base-dir> <raw-git-dir-output>
+  local base=$1 raw=$2
+  [ -n "$raw" ] || return 1
+  case "$raw" in
+    /*) : ;;
+    *) raw="$base/$raw" ;;
+  esac
+  (cd "$raw" 2>/dev/null && pwd -P)
+}
+
+# A pool spawn (treehouse or Orca) must yield a genuinely isolated, untouched
+# lease: distinct from the primary checkout (the original check), detached HEAD
+# (ship briefs create the task branch afterward, so an already-named branch
+# means this is somebody's in-progress checkout, not a fresh lease), clean (no
+# uncommitted or untracked changes), and not itself a repo's main worktree (a
+# main worktree can anchor linked worktrees of its own; a pooled lease is
+# always a linked worktree). The incident this hardens against: treehouse's
+# atelier pool exhausted and `treehouse get` fell back to returning the
+# captain's live `~/Developer/hde/atelier` checkout - a checkout on a named
+# feature branch, with uncommitted changes, that itself owns nine linked
+# worktrees. It was distinct from PROJ_ABS, so the original check alone passed
+# it straight to a crewmate.
 validate_spawn_worktree() {  # <source> <inspect-target>
-  local source=$1 inspect_target=$2 wt_real proj_real wt_top wt_top_real
+  local source=$1 inspect_target=$2
+  local wt_real proj_real wt_top wt_top_real reason
+  local wt_branch wt_dirty wt_git_dir_raw wt_common_dir_raw wt_git_dir wt_common_dir
   wt_real=
   if ! wt_real=$(cd "$WT" 2>/dev/null && pwd -P); then
     wt_real=
@@ -686,8 +713,33 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   if ! wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P); then
     wt_top_real=
   fi
+  reason=
   if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
-    echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
+    reason="resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'"
+  fi
+  if [ -z "$reason" ]; then
+    wt_branch=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    if [ -n "$wt_branch" ]; then
+      reason="HEAD is on named branch '$wt_branch', not a fresh detached pooled lease"
+    fi
+  fi
+  if [ -z "$reason" ]; then
+    wt_dirty=$(git -C "$WT" status --porcelain 2>/dev/null || true)
+    if [ -n "$wt_dirty" ]; then
+      reason="worktree has uncommitted or untracked changes, not a fresh pooled lease"
+    fi
+  fi
+  if [ -z "$reason" ]; then
+    wt_git_dir_raw=$( (cd "$WT" 2>/dev/null && git rev-parse --git-dir 2>/dev/null) || true )
+    wt_common_dir_raw=$( (cd "$WT" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null) || true )
+    wt_git_dir=$(resolve_git_meta_dir "$WT" "$wt_git_dir_raw" || true)
+    wt_common_dir=$(resolve_git_meta_dir "$WT" "$wt_common_dir_raw" || true)
+    if [ -n "$wt_git_dir" ] && [ -n "$wt_common_dir" ] && [ "$wt_git_dir" = "$wt_common_dir" ]; then
+      reason="worktree is a repo's own main checkout (git-dir equals git-common-dir), so it can anchor linked worktrees of its own, not a linked pooled lease"
+    fi
+  fi
+  if [ -n "$reason" ]; then
+    echo "error: $source did not yield an isolated worktree ($reason); refusing to launch to avoid tangling a live checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
 }

@@ -645,24 +645,14 @@ fi
 
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
-# Every backend's own current-path read (tmux's pane_current_path, herdr's
-# foreground_cwd, zellij/cmux's active pwd probe against the live shell) can
-# report the OS-level, physically-resolved cwd, so comparing it against a
-# still-symlinked PROJ_ABS can misfire both ways: false-negative (the poll
-# below never notices the pane left the project) or false-positive (the
-# isolation guard refuses a spawn that never actually tangled). Canonicalize
-# once here so every downstream comparison uses the same physical form
-# (docs/herdr-backend.md "Known gaps").
+# validate_spawn_worktree resolves the leased worktree's own path with `pwd -P`
+# (physical), so comparing it against a still-symlinked PROJ_ABS can misfire
+# both ways: false-negative (a tangled worktree inside the project's symlinked
+# form reads as different) or false-positive (the isolation guard refuses a
+# spawn that never actually tangled). Canonicalize once here so every
+# downstream comparison uses the same physical form (docs/herdr-backend.md
+# "Known gaps").
 PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_ABS"
-
-real_path_or_raw() {  # <path>
-  local path=$1 real
-  if real=$(cd "$path" 2>/dev/null && pwd -P); then
-    printf '%s\n' "$real"
-  else
-    printf '%s\n' "$path"
-  fi
-}
 
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
@@ -858,14 +848,6 @@ spawn_send_text_line() {  # <target> <text>
     cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
   esac
 }
-spawn_current_path() {  # <target>
-  case "$BACKEND" in
-    tmux) fm_backend_tmux_current_path "$1" ;;
-    herdr) fm_backend_herdr_current_path "$1" ;;
-    zellij) fm_backend_zellij_current_path "$1" "$W" ;;
-    cmux) fm_backend_cmux_current_path "$1" "$W" ;;
-  esac
-}
 spawn_send_literal() {  # <target> <text>
   case "$BACKEND" in
     tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
@@ -885,30 +867,31 @@ spawn_send_key() {  # <target> <key>
   esac
 }
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
-
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
-  # Target the stable window id, not the name: if the name is ever lost (e.g. an
-  # automatic-rename slips through), display-message -t <bad-name> falls back to the
-  # active client's window, which would misread firstmate's OWN pane path as the
-  # worktree and tangle a hook into the primary checkout. The window id never lies.
-  # Compare against PROJ_ABS_REAL (physical), not PROJ_ABS: a symlinked project
-  # prefix would otherwise make the pane's OS-level cwd read differ from
-  # PROJ_ABS on the very first poll, before the pane has actually moved.
-  for _ in $(seq 1 60); do
-    p=$(spawn_current_path "$WT_TARGET" || true)
-    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" != "$PROJ_ABS_REAL" ]; then
-      WT="$p"
-      break
-    fi
-    sleep 1
-  done
-  if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+  # Non-interactive, durable lease: run `treehouse get --lease` ourselves (cwd
+  # in PROJ_ABS, since treehouse resolves the pool from the working directory -
+  # same rule fm-teardown.sh's `treehouse return` already follows) and capture
+  # the printed worktree path directly, instead of sending interactive
+  # `treehouse get` into the pane and polling the pane's cwd for its subshell
+  # to move. This is the fix for the incident that motivated the isolation
+  # guard above: the interactive form opens a subshell and, when the pool
+  # cannot cleanly produce a worktree, silently falls back to the CALLER'S OWN
+  # DIRECTORY - fine for a human at a terminal, dangerous for an unattended
+  # spawn, and how a pane once landed in a captain's own live checkout. `--lease`
+  # never opens a subshell and never falls back: it either prints a leased
+  # worktree's absolute path on stdout, or it fails loudly.
+  command -v treehouse >/dev/null 2>&1 || { echo "error: treehouse command not found; cannot acquire a worktree for $ID in $PROJ_ABS" >&2; exit 1; }
+  WT=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || {
+    echo "error: treehouse get --lease failed to acquire a worktree for $ID in $PROJ_ABS; inspect the pool with 'treehouse status'" >&2
     exit 1
-  fi
+  }
+  [ -n "$WT" ] || { echo "error: treehouse get --lease printed no worktree path for $ID in $PROJ_ABS" >&2; exit 1; }
 
-  validate_spawn_worktree "treehouse get" "$T"
+  validate_spawn_worktree "treehouse get --lease" "$T"
+
+  # Send the cd to the rename-safe stable target (#134): a name-addressed send
+  # could land in the active client's window if the name were ever lost; the
+  # stable id never lies.
+  spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't

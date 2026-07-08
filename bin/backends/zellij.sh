@@ -396,10 +396,10 @@ fm_backend_zellij_target_ready() {  # <target> [expected-label]
 # (unlike herdr's `foreground_cwd`), so passive JSON polling cannot solve
 # this. Active probe instead: print the pane's `$PWD` with a unique marker
 # (atomically submitted, mirroring send_text_line), briefly settle, then capture
-# and read only that marker line. Scoped to fm-spawn.sh's own worktree-discovery
-# poll loop (the only caller of this op), where injecting a harmless extra
-# command before the harness ever launches is an acceptable trade for a reliable
-# answer.
+# and read only that marker line. fm-spawn.sh no longer calls this for worktree
+# acquisition (it captures `treehouse get --lease`'s printed path directly
+# instead); kept as a verified backend primitive, exercised by
+# tests/fm-backend-zellij*.test.sh.
 fm_backend_zellij_current_path() {  # <target> [expected-label]
   local target=$1 expected_label=${2:-} out line marker_begin="__FM_ZELLIJ_CWD_BEGIN__" marker_end="__FM_ZELLIJ_CWD_END__" in_block=0 chunk="" last=""
   fm_backend_zellij_target_ready "$target" "$expected_label" || return 0

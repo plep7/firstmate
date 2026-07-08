@@ -8,10 +8,11 @@
 # default (tmux, `backend=` absent) path stays byte-identical. Sourced only
 # through bin/fm-backend.sh's fm_backend_source, never directly.
 #
-# Worktree acquisition (running `treehouse get` inside the pane, and polling
-# its cwd) is unchanged by this extraction: P1 scopes only the session
-# provider, not the worktree provider, so fm-spawn.sh still drives that part
-# inline with these same send/current-path primitives.
+# Worktree acquisition is not this adapter's concern: P1 scopes only the
+# session provider, not the worktree provider. fm-spawn.sh acquires the
+# worktree itself by running `treehouse get --lease` directly (capturing its
+# printed path), then sends a `cd` into the pane via fm_backend_tmux_send_text_line
+# below - it no longer sends interactive `treehouse get` or polls the pane's cwd.
 #
 # The verified composer/busy-detection and verify-and-retry-submit primitives
 # already live in bin/fm-tmux-lib.sh, shared with the away-mode daemon
@@ -95,8 +96,11 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
 }
 
 # fm_backend_tmux_current_path: the live pane's current working directory, or
-# empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
-# `tmux display-message -p -t "$T" '#{pane_current_path}'`.
+# empty on any tmux error. `bin/backends/*.sh` is shared with (symlinked into)
+# a pre-lease historical fm-spawn.sh build in tests/fm-backend.test.sh's old-vs-new
+# conformance harness, which still polls this to discover a `treehouse get`
+# subshell's worktree; the current fm-spawn.sh no longer calls it (it captures
+# `treehouse get --lease`'s printed path directly instead).
 fm_backend_tmux_current_path() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
 }

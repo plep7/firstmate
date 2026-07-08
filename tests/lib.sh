@@ -131,11 +131,27 @@ fm_git_add_origin() {
 }
 
 # fm_git_worktree <repo> <worktree> <branch>: init <repo> with one commit, then
-# add a worktree on a fresh branch.
+# add a worktree on a fresh branch. Represents a crewmate's worktree AFTER it has
+# already created its task branch - the shape teardown/secondmate/turnend-guard
+# fixtures want. It is NOT the shape a fresh pool lease is in at fm-spawn.sh
+# validation time (see fm_git_pooled_worktree below); do not feed this into a
+# real fm-spawn.sh call whose worktree-isolation guard is expected to pass.
 fm_git_worktree() {
   local repo=$1 worktree=$2 branch=$3
   fm_git_init_commit "$repo"
   git -C "$repo" worktree add --quiet -b "$branch" "$worktree"
+}
+
+# fm_git_pooled_worktree <repo> <worktree>: init <repo> with one commit, then add
+# a linked worktree detached at that commit - the shape a genuine treehouse/Orca
+# pool lease is in when fm-spawn.sh's worktree-isolation guard validates it
+# (clean, detached HEAD, no branch of its own yet; ship briefs create the task
+# branch afterward). Use this, not fm_git_worktree, to fake the resolved
+# worktree in a test that drives a real fm-spawn.sh spawn.
+fm_git_pooled_worktree() {
+  local repo=$1 worktree=$2
+  fm_git_init_commit "$repo"
+  git -C "$repo" worktree add --quiet --detach "$worktree"
 }
 
 # --- state/<id>.meta writers ------------------------------------------------

@@ -191,6 +191,49 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout() {
   pass "fm-brief.sh: ship and scout scaffolds make omitted Herdr intent fail-visible"
 }
 
+test_no_mistakes_dod_wires_pregate_visual_evidence() {
+  local home id brief
+  home="$TMP_ROOT/pr-visual-format-home"
+  mkdir -p "$home/data"
+  id="brief-visualfmt-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+  assert_grep "check whether the fleet visual-evidence config exists at '$home/config/pr-visual-format.md'" "$brief" \
+    "no-mistakes DOD did not point at the FM_HOME-resolved pr-visual-format.md path"
+  assert_grep "classify your own diff as backend, frontend, or bug-fix per the heuristics in that file" "$brief" \
+    "no-mistakes DOD dropped the PR-type classification instruction"
+  assert_grep "before calling \`no-mistakes axi run\`" "$brief" \
+    "no-mistakes DOD did not require evidence generation before invoking no-mistakes"
+  assert_grep "If that file does not exist in this home, skip this step silently" "$brief" \
+    "no-mistakes DOD dropped the graceful-degradation instruction for older homes"
+  # Existing gate-driving guidance must remain, additive only.
+  assert_grep "ask-user findings are not yours to answer" "$brief" \
+    "no-mistakes DOD lost its ask-user escalation guidance"
+  assert_grep "Avoid \`--yes\`" "$brief" \
+    "no-mistakes DOD lost its --yes avoidance guidance"
+  assert_grep "append \`done: PR {url} checks green\` and stop" "$brief" \
+    "no-mistakes DOD lost its CI-green done line"
+  pass "fm-brief.sh: no-mistakes DOD wires pre-gate visual-evidence generation"
+}
+
+test_direct_pr_and_local_only_briefs_skip_visual_evidence() {
+  local home brief
+  home="$TMP_ROOT/pr-visual-format-skip-home"
+  write_registry "$home"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-visualfmt-f1 direct-proj >/dev/null 2>&1
+  brief="$home/data/brief-visualfmt-f1/brief.md"
+  assert_no_grep "pr-visual-format.md" "$brief" \
+    "direct-PR brief must not reference the fleet visual-evidence config"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-visualfmt-f2 local-proj >/dev/null 2>&1
+  brief="$home/data/brief-visualfmt-f2/brief.md"
+  assert_no_grep "pr-visual-format.md" "$brief" \
+    "local-only brief must not reference the fleet visual-evidence config"
+  pass "fm-brief.sh: direct-PR and local-only briefs stay untouched by visual-evidence wiring"
+}
+
 test_secondmate_no_projects_charter() {
   local home brief status
   home="$TMP_ROOT/no-projects-home"
@@ -313,6 +356,8 @@ test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_no_mistakes_dod_wires_pregate_visual_evidence
+test_direct_pr_and_local_only_briefs_skip_visual_evidence
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path

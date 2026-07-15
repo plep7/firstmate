@@ -305,9 +305,16 @@ EOF
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
     RULE1='1. Never push to the default branch. Never merge a PR.'
+    PR_VISUAL_FORMAT=$(shell_quote "$FM_HOME/config/pr-visual-format.md")
     DOD=$(cat <<EOF
 # Definition of done
 The task is complete only when committed on your branch.
+
+Before you ever invoke \`no-mistakes axi run\`, check whether the fleet visual-evidence config exists at $PR_VISUAL_FORMAT.
+If it exists, read it, classify your own diff as backend, frontend, or bug-fix per the heuristics in that file, then generate the type-appropriate visual evidence: a mermaid diagram drafted as text for backend, screenshot(s) or a GIF captured and committed to the branch for frontend, or a before/after pair of whichever evidence type fits for a bug fix.
+Commit that evidence as part of your normal implementation commits, before calling \`no-mistakes axi run\`, so it rides through validation and review with the rest of the change.
+If that file does not exist in this home, skip this step silently and continue as before; this fleet is not yet configured for it.
+
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 

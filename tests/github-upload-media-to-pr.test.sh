@@ -42,8 +42,8 @@ test_clean_failure_and_fallback_documented() {
 
 test_dom_churn_and_recovery_documented() {
   assert_grep 'DOM churn and recovery' "$SKILL" "skill has no DOM-churn section"
-  assert_grep 'Re-snapshot before anything else' "$SKILL" \
-    "skill does not document the re-snapshot-on-failure recovery step"
+  assert_grep 'Re-inspect before anything else' "$SKILL" \
+    "skill does not document the re-inspect-on-failure recovery step"
   pass "skill documents the DOM-churn maintenance expectation and recovery step"
 }
 
@@ -53,9 +53,22 @@ test_does_not_attempt_login() {
   pass "skill refuses to attempt its own login"
 }
 
+test_playwright_primary_chrome_devtools_axi_alternative() {
+  assert_grep 'Playwright is v1' "$SKILL" \
+    "skill does not state Playwright as the primary backend"
+  assert_grep 'chrome-devtools-axi' "$SKILL" \
+    "skill does not mention chrome-devtools-axi as the documented alternative"
+  assert_grep 'succeeded exactly once' "$SKILL" \
+    "skill does not record the observed chrome-devtools-axi upload flake"
+  assert_grep 'is **not** proof of success' "$SKILL" \
+    "skill does not warn that exit 0 is not proof of a successful upload"
+  pass "skill documents Playwright as primary and the chrome-devtools-axi flake as the reason"
+}
+
 test_skill_file_exists_and_has_frontmatter
 test_never_uses_cookie_auth
 test_handles_both_url_forms
 test_clean_failure_and_fallback_documented
 test_dom_churn_and_recovery_documented
 test_does_not_attempt_login
+test_playwright_primary_chrome_devtools_axi_alternative

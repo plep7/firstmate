@@ -228,6 +228,77 @@ test_no_mistakes_dod_wires_pregate_visual_evidence() {
   pass "fm-brief.sh: no-mistakes DOD wires pre-gate visual-evidence generation"
 }
 
+test_no_mistakes_dod_wires_born_formatted_pr_flow() {
+  local home id brief
+  home="$TMP_ROOT/pr-fmt-rewire-home"
+  mkdir -p "$home/data"
+  id="brief-prfmt-g1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+
+  # The --skip invocation that keeps the gate from pushing, opening, or
+  # watching CI itself.
+  assert_grep "no-mistakes axi run --intent \"<one-line intent>\" --skip push,pr,ci" "$brief" \
+    "no-mistakes DOD did not wire the --skip push,pr,ci gate invocation"
+
+  # The born-formatted PR steps: firstmate composes the body itself instead
+  # of drafting then editing with bin/nm-pr-format.
+  assert_grep "compose the PR body yourself using the fleet config rules" "$brief" \
+    "no-mistakes DOD dropped the born-formatted PR body composition instruction"
+  assert_grep "voice rules it specifies" "$brief" \
+    "no-mistakes DOD dropped the fleet-config voice-rules reference"
+  assert_grep "a \`## Changes\` section with file:line anchors for every change" "$brief" \
+    "no-mistakes DOD dropped the file:line anchor requirement for Changes"
+  assert_grep "type-appropriate \`## Evidence\` or \`## Before/After\` section" "$brief" \
+    "no-mistakes DOD dropped the type-appropriate Evidence/Before-After section"
+  assert_grep "a \`## Testing\` section distilled from the review and test evidence" "$brief" \
+    "no-mistakes DOD dropped the Testing-distilled-from-evidence instruction"
+  assert_grep "open the PR yourself with \`gh-axi\` as a **draft**" "$brief" \
+    "no-mistakes DOD did not require opening the PR as a draft"
+  assert_grep "titled with the Jira key firstmate gave you in the Task section above" "$brief" \
+    "no-mistakes DOD dropped the Jira-key title instruction"
+
+  # Degradation rules: absent fleet config or an older gate without --skip
+  # falls back to the full pipeline, and the draft-then-edit tool remains
+  # documented as that fallback path.
+  assert_grep "Fall back to this flow verbatim" "$brief" \
+    "no-mistakes DOD dropped the fallback-to-full-pipeline instruction"
+  assert_grep "does not list a \`--skip\` flag covering \`push\`, \`pr\`, and \`ci\`" "$brief" \
+    "no-mistakes DOD dropped the older-gate degradation condition"
+  assert_grep "bin/nm-pr-format <pr#> --summary \"<why>\" --repo <owner/name> --apply" "$brief" \
+    "no-mistakes DOD dropped the nm-pr-format fallback invocation"
+
+  # Existing gate-driving rules must remain, additive only.
+  assert_grep "ask-user findings are not yours to answer" "$brief" \
+    "no-mistakes DOD lost its ask-user escalation guidance"
+  assert_grep "Avoid \`--yes\`" "$brief" \
+    "no-mistakes DOD lost its --yes avoidance guidance"
+  assert_grep "Do not hand-edit, commit, or fix findings yourself while a run is active" "$brief" \
+    "no-mistakes DOD lost its respond-not-hand-fix guidance"
+  assert_grep "append \`done: PR {url} checks green\` and stop" "$brief" \
+    "no-mistakes DOD lost its CI-green done line"
+
+  pass "fm-brief.sh: no-mistakes DOD wires the born-formatted PR flow with a fallback"
+}
+
+test_direct_pr_and_local_only_briefs_skip_born_formatted_pr_flow() {
+  local home brief
+  home="$TMP_ROOT/pr-fmt-rewire-skip-home"
+  write_registry "$home"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-prfmt-h1 direct-proj >/dev/null 2>&1
+  brief="$home/data/brief-prfmt-h1/brief.md"
+  assert_no_grep "Born-formatted PR flow" "$brief" \
+    "direct-PR brief must not reference the born-formatted PR flow"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-prfmt-h2 local-proj >/dev/null 2>&1
+  brief="$home/data/brief-prfmt-h2/brief.md"
+  assert_no_grep "Born-formatted PR flow" "$brief" \
+    "local-only brief must not reference the born-formatted PR flow"
+  pass "fm-brief.sh: direct-PR and local-only briefs stay untouched by the born-formatted PR flow"
+}
+
 test_direct_pr_and_local_only_briefs_skip_visual_evidence() {
   local home brief
   home="$TMP_ROOT/pr-visual-format-skip-home"
@@ -389,6 +460,8 @@ test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_no_mistakes_dod_wires_pregate_visual_evidence
 test_direct_pr_and_local_only_briefs_skip_visual_evidence
+test_no_mistakes_dod_wires_born_formatted_pr_flow
+test_direct_pr_and_local_only_briefs_skip_born_formatted_pr_flow
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path

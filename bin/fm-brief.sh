@@ -322,12 +322,26 @@ You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
 Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
 
-Two firstmate-specific rules layer on top of that guidance:
+Two firstmate-specific rules layer on top of that guidance, in either flow below:
 - ask-user findings are not yours to answer: escalate to firstmate (rule 6) and stop.
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
 - Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+## Born-formatted PR flow (default)
+Take this flow when the fleet visual-evidence config exists at $PR_VISUAL_FORMAT and \`no-mistakes axi run --help\` on the installed gate lists a \`--skip\` flag covering the \`push\`, \`pr\`, and \`ci\` steps.
+
+1. Invoke the gate with those three steps skipped, so it runs the full quality pipeline (review, test, document, lint) and stops before pushing anything: \`no-mistakes axi run --intent "<one-line intent>" --skip push,pr,ci\`.
+2. Once that run passes, compose the PR body yourself using the fleet config rules: the voice rules it specifies, a \`## Summary\`, a \`## Changes\` section with file:line anchors for every change, a type-appropriate \`## Evidence\` or \`## Before/After\` section built from the evidence you committed pre-gate, and a \`## Testing\` section distilled from the review and test evidence the run produced.
+3. Push your branch to \`origin\` and open the PR yourself with \`gh-axi\` as a **draft**, titled with the Jira key firstmate gave you in the Task section above, using the body from step 2.
+4. Watch the checks on that PR with \`gh-axi\` until they settle.
+
+## Full-pipeline flow (fallback)
+Fall back to this flow verbatim, and do not attempt the flow above, when the fleet visual-evidence config is absent from this home, or \`no-mistakes axi run --help\` on the installed gate does not list a \`--skip\` flag covering \`push\`, \`pr\`, and \`ci\` (an older gate version).
+
+Invoke \`no-mistakes axi run\` for the full pipeline; it pushes and opens the PR itself.
+Once the gate reaches checks-passed, reformat the PR it opened into the shared PR template with \`bin/nm-pr-format <pr#> --summary "<why>" --repo <owner/name> --apply\` (omit \`--apply\` first to preview), as documented at the top of that script.
+
+After either flow reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
 )
     ;;

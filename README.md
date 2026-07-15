@@ -179,6 +179,9 @@ Firstmate's skills live in two separate places with different audiences:
   Each one is a self-contained skill with no dependency on firstmate's paths, tools, or vocabulary.
   Today that is `skills/stow`, a generic session-knowledge-sweep skill that routes findings by explicit instruction first, then existing local conventions, then a private `.stow-notes.md` fallback in the current directory, and closes with a resume pointer for the next session.
   It intentionally shares no code with the firstmate-internal `.agents/skills/stow` it is named after, so the two can evolve independently.
+  `skills/github-upload-media-to-pr` uploads images/GIFs/video to a GitHub PR's native `user-attachments` CDN from a headless browser session (via `chrome-devtools-axi`, driving an already-authenticated session through the PR comment box's upload staging area) and embeds the resulting URLs in the PR body, giving fleet PRs a real inline-playing video where a committed-file link only gets a click-through.
+  It falls back explicitly to the committed-file-link floor when no authenticated session is reachable or the upload fails, and it never reads, stores, or logs a `user_session` cookie.
+  A one-time user-level install (copy or symlink the skill directory into your harness's skills path, e.g. `~/.claude/skills/`, alongside the `no-mistakes` skill precedent) makes it invocable by every crewmate harness, not just sessions that happen to run inside this repo.
 
 ## Documentation
 

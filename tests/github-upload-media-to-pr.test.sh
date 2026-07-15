@@ -18,6 +18,7 @@ test_skill_file_exists_and_has_frontmatter() {
 }
 
 test_never_uses_cookie_auth() {
+  # shellcheck disable=SC2016  # Literal backticks in the pattern, not command substitution.
   assert_grep 'never reads, stores, or logs a `user_session` cookie' "$SKILL" \
     "skill does not state the user_session cookie prohibition"
   assert_grep 'not implemented here' "$SKILL" \

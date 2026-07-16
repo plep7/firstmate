@@ -80,7 +80,14 @@ MARKER="$SCRATCH/heartbeat.log"
 fm_backend_herdr_cli "$SESSION" pane run "$LIVE_PANE_ID" \
   "sh -c 'while true; do date +%s >> $MARKER; sleep 1; done'" >/dev/null 2>&1 \
   || fail "could not start the live heartbeat process in the startup workspace's pane"
-sleep 2
+# Bounded poll rather than a fixed sleep: the pane's fresh shell can take
+# several seconds to become ready on a heavy shell-init machine, and the
+# property under test is survival across create_task, not startup latency.
+_hb_i=0
+while [ "$_hb_i" -lt 30 ] && [ ! -s "$MARKER" ]; do
+  sleep 0.5
+  _hb_i=$((_hb_i + 1))
+done
 [ -s "$MARKER" ] || fail "the live heartbeat process did not start writing its marker file"
 BEFORE_COUNT=$(wc -l < "$MARKER" | tr -d '[:space:]')
 pass "repro setup: a live long-running process is running in the startup workspace's single tab (label '1'), heartbeating to a marker file"

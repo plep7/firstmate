@@ -72,7 +72,8 @@ On an unmarked return, `bin/fm-afk-return.sh` owns ordered shutdown, durable cat
 ## Runtime session backends
 
 The runtime backend is the session-provider layer below firstmate's scripts.
-It owns task endpoint creation, bounded capture, text/key sends, current-path reads for spawn-time worktree discovery when the backend does not create the worktree itself, live-window fallback lookup, agent-process liveness probes where verified, and endpoint teardown.
+It owns task endpoint creation, bounded capture, text/key sends, live-window fallback lookup, agent-process liveness probes where verified, and endpoint teardown.
+Per-backend current-path reads remain verified primitives with their own test coverage, but they are no longer on the spawn path: `fm-spawn.sh` captures the worktree path directly from non-interactive `treehouse get --lease` instead of polling the pane's cwd (see "Worktrees, not branches in your checkout").
 `bin/fm-backend.sh` centralizes backend selection, `state/<id>.meta` helpers, selector resolution, and operation dispatch; `bin/backends/tmux.sh` is the verified reference adapter ([`docs/tmux-backend.md`](tmux-backend.md)), and `bin/backends/herdr.sh` (P2), `bin/backends/zellij.sh` (P3), `bin/backends/orca.sh` (P4), and `bin/backends/cmux.sh` (P5) are experimental task-spawn adapters.
 New spawns select a backend from `--backend`, then `FM_BACKEND`, then local `config/backend`, then runtime auto-detection from `$TMUX`, `HERDR_ENV=1`, or cmux runtime signals, then default `tmux`.
 Runtime auto-detection is innermost-first: `$TMUX` wins over `HERDR_ENV=1`, which wins over cmux's primary `CMUX_WORKSPACE_ID` marker and documented fallback signals; auto-detected herdr or cmux prints a one-time opt-out notice, auto-detected tmux stays silent, and zellij and orca are never auto-detected (only explicit selection).
@@ -94,7 +95,8 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 ## Worktrees, not branches in your checkout
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
-For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
+For treehouse-backed backends, `fm-spawn.sh` acquires the worktree itself with non-interactive `treehouse get --lease --lease-holder <id>` and captures the printed path, then sends the pane only a `cd` into it; the lease form never opens a subshell and never falls back to the caller's own directory - it prints a leased worktree's path or fails loudly.
+For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout, at detached HEAD, clean, and a linked (not main) worktree - the shape of a genuine fresh pooled lease (`validate_spawn_worktree`, applied to treehouse and Orca spawns alike).
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.

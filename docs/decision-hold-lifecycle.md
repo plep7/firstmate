@@ -80,3 +80,6 @@ $ git diff --check
 $ for test_script in tests/*.test.sh; do bash "$test_script"; done
 ALL 71 TEST SCRIPTS PASSED
 ```
+
+The run-all loop above is the pre-aggregation form this record was captured with; it has since been retired because it masks individual script failures.
+For new runs, use the failure-aggregating loop `CONTRIBUTING.md` owns ("Check and test the toolbelt before pushing").

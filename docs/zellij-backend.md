@@ -122,13 +122,13 @@ Verified against the real binary, step by step:
 This is a genuinely worse gap than herdr's frozen-cwd trap: herdr at least exposes `foreground_cwd` as the fix (`docs/herdr-backend.md`); zellij's CLI has no equivalent primitive to reach for.
 
 **Workaround, `fm_backend_zellij_current_path`:** actively probe instead of passively reading JSON.
-Submit a short begin marker, `pwd`, and a short end marker into the pane via the same `send_text_line` primitive used for `treehouse get` itself, briefly settle, capture the pane, and concatenate only the visual lines between the two markers.
+Submit a short begin marker, `pwd`, and a short end marker into the pane via the same `send_text_line` primitive the fixed spawn-time commands use, briefly settle, capture the pane, and concatenate only the visual lines between the two markers.
 This works because `pwd` reads from the current foreground shell no matter how many subshells deep the pane is, sidestepping the need for any structured field at all.
 The begin/end markers avoid false matches from absolute-path prompts, previous scrollback, and treehouse's own `~`-prefixed "Entered worktree at ..." banner (`tests/fm-backend-zellij.test.sh` pins prompt-path, banner, and wrapped-path cases).
 Concatenating the marked block also handles a long worktree path that zellij's visual screen dump soft-wraps across multiple terminal rows.
 Verified against the real binary in both shapes: a direct `cd` in the pane's own shell, AND a nested subshell's own `cd` (`bash -c` spawned and cd'd inside it) - the load-bearing case matching `treehouse get`'s actual shape (`tests/fm-backend-zellij-smoke.test.sh`'s two `current_path` assertions).
 
-This op is scoped to `fm-spawn.sh`'s own worktree-discovery poll loop, the only caller - injecting a harmless extra cwd probe into the pane's scrollback before the harness ever launches is an acceptable trade for a reliable answer, and does not affect the interactive session the crewmate later runs in.
+This op was built for `fm-spawn.sh`'s worktree-discovery poll loop, its original only caller; spawn has since moved to capturing the leased worktree path directly from non-interactive `treehouse get --lease` (see `docs/architecture.md` "Worktrees, not branches in your checkout"), so the primitive is kept as a verified backend fact exercised by `tests/fm-backend-zellij*.test.sh` rather than on the spawn path.
 
 ## Focus-steal on new-tab (report gap #5, confirmed - and mitigated)
 
@@ -161,7 +161,7 @@ This means the exit code can **never** be trusted to detect a bad target on this
 2. Output-**shape** validation rejects the "session not found" text fallback structurally: `fm_backend_zellij_create_task` requires `new-tab`'s stdout to parse as a bare integer (the colored session-list text does not), and every `list-panes`/`list-tabs` consumer pipes through `jq`, which fails to parse the plain-text fallback as JSON.
 
 **Accepted residual gaps**: a pane can still die in the brief window between `fm_backend_zellij_target_ready`'s ownership check and the operation's own `zellij action` call.
-That remaining race degrades to "the operation quietly did nothing" - the same class of gap firstmate already tolerates for an unverified send on any backend, caught downstream by `fm-spawn.sh`'s worktree-discovery poll timing out after 60s, `fm_backend_zellij_send_text_submit`'s preflight or content-diff retry loop (which reports `send-failed`, `pending`, or `unknown` rather than a false "sent" for these cases), or the watcher's stale-pane detection eventually noticing a pane that never changes.
+That remaining race degrades to "the operation quietly did nothing" - the same class of gap firstmate already tolerates for an unverified send on any backend, caught downstream by `fm_backend_zellij_send_text_submit`'s preflight or content-diff retry loop (which reports `send-failed`, `pending`, or `unknown` rather than a false "sent" for these cases), or the watcher's stale-pane detection eventually noticing a pane that never changes.
 An explicit raw `session:pane` target can also still address a reused pane id if an operator deliberately bypasses firstmate metadata; that path is kept as an escape hatch, not as the normal task routing path.
 
 ## Every pane op needs an EXPLICIT `--pane-id` (un-anticipated finding)

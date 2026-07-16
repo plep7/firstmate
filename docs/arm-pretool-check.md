@@ -239,5 +239,6 @@ bash -n bin/fm-arm-pretool-check.sh
 shellcheck bin/fm-arm-pretool-check.sh tests/fm-arm-pretool-check.test.sh
 node --check bin/fm-arm-command-policy.mjs
 tests/fm-arm-pretool-check.test.sh
-for test_script in tests/*.test.sh; do bash "$test_script"; done
 ```
+
+Then run the full behavior-test sweep with the failure-aggregating loop `CONTRIBUTING.md` owns ("Check and test the toolbelt before pushing").

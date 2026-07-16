@@ -169,12 +169,14 @@ test_guard_warnings() {
 }
 
 test_lock_single_winner_under_concurrency() {
-  local dir state lockdir marker i pids pid wins
+  local dir state lockdir marker losers i pids pid wins
   dir=$(make_case lock-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
+  losers="$dir/losers"
   : > "$marker"
+  mkdir -p "$losers"
   pids=
   i=1
   while [ "$i" -le 40 ]; do
@@ -182,11 +184,20 @@ test_lock_single_winner_under_concurrency() {
       . "$1"
       if fm_lock_try_acquire "$2"; then
         printf "%s\n" "$$" >> "$3"
-        # Stay alive so the held lock names a live pid for the whole window;
-        # otherwise a late contender could legitimately reclaim a dead-pid lock.
-        sleep 1
+        # Hold the lock until every contender has finished trying, so the held
+        # lock names a live pid for the whole contention window; a fixed sleep
+        # let a slow-scheduled late contender meet a dead-pid lock and
+        # legitimately reclaim it. Bounded so a genuine double-win (each
+        # winner then sees one loser too few) fails instead of hanging.
+        i=0
+        while [ "$i" -lt 300 ] && [ "$(ls "$4" 2>/dev/null | wc -l)" -lt 39 ]; do
+          sleep 0.1
+          i=$((i + 1))
+        done
+      else
+        : > "$4/$$"
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+    ' _ "$LIB" "$lockdir" "$marker" "$losers" &
     pids="$pids $!"
     i=$((i + 1))
   done
@@ -218,15 +229,17 @@ test_lock_steals_dead_pid_lock() {
 }
 
 test_lock_stale_steal_single_winner_under_concurrency() {
-  local dir state lockdir dead marker i pids pid wins
+  local dir state lockdir dead marker losers i pids pid wins
   dir=$(make_case lock-stale-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
+  losers="$dir/losers"
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
   : > "$marker"
+  mkdir -p "$losers"
   pids=
   i=1
   while [ "$i" -le 40 ]; do
@@ -234,9 +247,20 @@ test_lock_stale_steal_single_winner_under_concurrency() {
       . "$1"
       if fm_lock_try_acquire "$2"; then
         printf "%s\n" "${BASHPID:-$$}" >> "$3"
-        sleep 1
+        # Hold the stolen lock until every contender has finished trying (see
+        # test_lock_single_winner_under_concurrency): a fixed sleep let a
+        # slow-scheduled late contender meet the winner-exited dead-pid lock
+        # and legitimately re-steal it. Bounded so a genuine double-win fails
+        # instead of hanging.
+        i=0
+        while [ "$i" -lt 300 ] && [ "$(ls "$4" 2>/dev/null | wc -l)" -lt 39 ]; do
+          sleep 0.1
+          i=$((i + 1))
+        done
+      else
+        : > "$4/${BASHPID:-$$}"
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+    ' _ "$LIB" "$lockdir" "$marker" "$losers" &
     pids="$pids $!"
     i=$((i + 1))
   done
@@ -437,15 +461,31 @@ test_watch_restart_rejects_reused_pid() {
 }
 
 test_watch_restart_reports_healthy_peer_without_attaching() {
-  local dir state fakebin out peer identity armpid status
+  local dir state fakebin out peer identity armpid status i
   dir=$(make_case restart-healthy-peer)
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
   mark_pr_check_migration_complete "$state"
-  node -e 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 300000)' &
+  # A TERM-resistant peer with an exec-stable ps command line. A launcher-shim
+  # runtime (e.g. a proto-shimmed node) re-execs in place AFTER spawn, so an
+  # identity recorded from the pre-exec command line mismatches every later
+  # read and the restart path wrongly clears the healthy peer's lock. bash's
+  # own argv never mutates, and the trailing marker arg makes the settled
+  # command line recognizable.
+  bash -c 'trap "" TERM; while :; do sleep 30; done' fm-peer-ignore-term &
   peer=$!
-  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
+  # Capture the identity only once exec has settled: right after fork, ps can
+  # still report the parent's pre-exec command line for a beat.
+  identity=
+  i=0
+  while [ "$i" -lt 50 ]; do
+    identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer" 2>/dev/null || true)
+    case "$identity" in *fm-peer-ignore-term*) break ;; esac
+    sleep 0.05
+    i=$((i + 1))
+  done
+  case "$identity" in *fm-peer-ignore-term*) ;; *) fail "could not identify peer pid" ;; esac
   mkdir "$state/.watch.lock"
   printf '%s\n' "$peer" > "$state/.watch.lock/pid"
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"

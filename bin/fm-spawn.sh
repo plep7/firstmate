@@ -645,14 +645,24 @@ fi
 
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
-# validate_spawn_worktree resolves the leased worktree's own path with `pwd -P`
-# (physical), so comparing it against a still-symlinked PROJ_ABS can misfire
-# both ways: false-negative (a tangled worktree inside the project's symlinked
-# form reads as different) or false-positive (the isolation guard refuses a
-# spawn that never actually tangled). Canonicalize once here so every
-# downstream comparison uses the same physical form (docs/herdr-backend.md
-# "Known gaps").
+# Every backend's own current-path read (tmux's pane_current_path, herdr's
+# foreground_cwd, zellij/cmux's active pwd probe against the live shell) can
+# report the OS-level, physically-resolved cwd, so comparing it against a
+# still-symlinked PROJ_ABS can misfire both ways: false-negative (the poll
+# below never notices the pane left the project) or false-positive (the
+# isolation guard refuses a spawn that never actually tangled). Canonicalize
+# once here so every downstream comparison uses the same physical form
+# (docs/herdr-backend.md "Known gaps").
 PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_ABS"
+
+real_path_or_raw() {  # <path>
+  local path=$1 real
+  if real=$(cd "$path" 2>/dev/null && pwd -P); then
+    printf '%s\n' "$real"
+  else
+    printf '%s\n' "$path"
+  fi
+}
 
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
@@ -662,35 +672,8 @@ PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_AB
 # herdr-sm-spaces-k4). Both branches converge on the same $T ("target") string
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
-# Resolve one of `git rev-parse --git-dir`/`--git-common-dir` (run with <base-dir>
-# as cwd, so a relative result is relative to it) to a canonical absolute path.
-# Echoes nothing and returns 1 if the raw value is empty or unresolvable.
-resolve_git_meta_dir() {  # <base-dir> <raw-git-dir-output>
-  local base=$1 raw=$2
-  [ -n "$raw" ] || return 1
-  case "$raw" in
-    /*) : ;;
-    *) raw="$base/$raw" ;;
-  esac
-  (cd "$raw" 2>/dev/null && pwd -P)
-}
-
-# A pool spawn (treehouse or Orca) must yield a genuinely isolated, untouched
-# lease: distinct from the primary checkout (the original check), detached HEAD
-# (ship briefs create the task branch afterward, so an already-named branch
-# means this is somebody's in-progress checkout, not a fresh lease), clean (no
-# uncommitted or untracked changes), and not itself a repo's main worktree (a
-# main worktree can anchor linked worktrees of its own; a pooled lease is
-# always a linked worktree). The incident this hardens against: treehouse's
-# atelier pool exhausted and `treehouse get` fell back to returning the
-# captain's live `~/Developer/hde/atelier` checkout - a checkout on a named
-# feature branch, with uncommitted changes, that itself owns nine linked
-# worktrees. It was distinct from PROJ_ABS, so the original check alone passed
-# it straight to a crewmate.
 validate_spawn_worktree() {  # <source> <inspect-target>
-  local source=$1 inspect_target=$2
-  local wt_real proj_real wt_top wt_top_real reason
-  local wt_branch wt_dirty wt_git_dir_raw wt_common_dir_raw wt_git_dir wt_common_dir
+  local source=$1 inspect_target=$2 wt_real proj_real wt_top wt_top_real
   wt_real=
   if ! wt_real=$(cd "$WT" 2>/dev/null && pwd -P); then
     wt_real=
@@ -701,36 +684,20 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   if ! wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P); then
     wt_top_real=
   fi
-  reason=
   if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
-    reason="resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'"
-  fi
-  if [ -z "$reason" ]; then
-    wt_branch=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
-    if [ -n "$wt_branch" ]; then
-      reason="HEAD is on named branch '$wt_branch', not a fresh detached pooled lease"
-    fi
-  fi
-  if [ -z "$reason" ]; then
-    wt_dirty=$(git -C "$WT" status --porcelain 2>/dev/null || true)
-    if [ -n "$wt_dirty" ]; then
-      reason="worktree has uncommitted or untracked changes, not a fresh pooled lease"
-    fi
-  fi
-  if [ -z "$reason" ]; then
-    wt_git_dir_raw=$( (cd "$WT" 2>/dev/null && git rev-parse --git-dir 2>/dev/null) || true )
-    wt_common_dir_raw=$( (cd "$WT" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null) || true )
-    wt_git_dir=$(resolve_git_meta_dir "$WT" "$wt_git_dir_raw" || true)
-    wt_common_dir=$(resolve_git_meta_dir "$WT" "$wt_common_dir_raw" || true)
-    if [ -n "$wt_git_dir" ] && [ -n "$wt_common_dir" ] && [ "$wt_git_dir" = "$wt_common_dir" ]; then
-      reason="worktree is a repo's own main checkout (git-dir equals git-common-dir), so it can anchor linked worktrees of its own, not a linked pooled lease"
-    fi
-  fi
-  if [ -n "$reason" ]; then
-    echo "error: $source did not yield an isolated worktree ($reason); refusing to launch to avoid tangling a live checkout. Inspect target $inspect_target" >&2
+    echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
 }
+# Overlay hook: a tracked, code-root-sourced config/overlay/fm-spawn.sh may
+# redefine validate_spawn_worktree (hardened checks) and define
+# fm_overlay_spawn_acquire_worktree (an alternate acquisition mechanism).
+# Sourced from $FM_ROOT (ships with the code, not per-home config) after
+# upstream's own definition above but before its first call site below, so a
+# redefinition shadows it for every call, including the orca branch. See
+# data/fm-fork-extension-design/report.md section 3.
+# shellcheck source=/dev/null
+[ -f "$FM_ROOT/config/overlay/fm-spawn.sh" ] && . "$FM_ROOT/config/overlay/fm-spawn.sh"
 
 W="fm-$ID"
 case "$BACKEND" in
@@ -848,6 +815,14 @@ spawn_send_text_line() {  # <target> <text>
     cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
   esac
 }
+spawn_current_path() {  # <target>
+  case "$BACKEND" in
+    tmux) fm_backend_tmux_current_path "$1" ;;
+    herdr) fm_backend_herdr_current_path "$1" ;;
+    zellij) fm_backend_zellij_current_path "$1" "$W" ;;
+    cmux) fm_backend_cmux_current_path "$1" "$W" ;;
+  esac
+}
 spawn_send_literal() {  # <target> <text>
   case "$BACKEND" in
     tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
@@ -867,31 +842,41 @@ spawn_send_key() {  # <target> <key>
   esac
 }
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  # Non-interactive, durable lease: run `treehouse get --lease` ourselves (cwd
-  # in PROJ_ABS, since treehouse resolves the pool from the working directory -
-  # same rule fm-teardown.sh's `treehouse return` already follows) and capture
-  # the printed worktree path directly, instead of sending interactive
-  # `treehouse get` into the pane and polling the pane's cwd for its subshell
-  # to move. This is the fix for the incident that motivated the isolation
-  # guard above: the interactive form opens a subshell and, when the pool
-  # cannot cleanly produce a worktree, silently falls back to the CALLER'S OWN
-  # DIRECTORY - fine for a human at a terminal, dangerous for an unattended
-  # spawn, and how a pane once landed in a captain's own live checkout. `--lease`
-  # never opens a subshell and never falls back: it either prints a leased
-  # worktree's absolute path on stdout, or it fails loudly.
-  command -v treehouse >/dev/null 2>&1 || { echo "error: treehouse command not found; cannot acquire a worktree for $ID in $PROJ_ABS" >&2; exit 1; }
-  WT=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || {
-    echo "error: treehouse get --lease failed to acquire a worktree for $ID in $PROJ_ABS; inspect the pool with 'treehouse status'" >&2
+  # Overlay-defined acquisition (e.g. a non-interactive treehouse-lease call)
+  # wins when this home defines it; the else branch is upstream's original
+  # interactive-polling mechanism, kept at its original indentation (not
+  # re-nested) so a future upstream edit inside it still applies as a clean
+  # same-line match.
+  if declare -f fm_overlay_spawn_acquire_worktree >/dev/null 2>&1; then
+    WT=$(fm_overlay_spawn_acquire_worktree "$PROJ_ABS" "$ID" "$WT_TARGET" "$T") || exit 1
+    validate_spawn_worktree "overlay-lease" "$T"
+    spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+  else
+  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+
+  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  # Target the stable window id, not the name: if the name is ever lost (e.g. an
+  # automatic-rename slips through), display-message -t <bad-name> falls back to the
+  # active client's window, which would misread firstmate's OWN pane path as the
+  # worktree and tangle a hook into the primary checkout. The window id never lies.
+  # Compare against PROJ_ABS_REAL (physical), not PROJ_ABS: a symlinked project
+  # prefix would otherwise make the pane's OS-level cwd read differ from
+  # PROJ_ABS on the very first poll, before the pane has actually moved.
+  for _ in $(seq 1 60); do
+    p=$(spawn_current_path "$WT_TARGET" || true)
+    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" != "$PROJ_ABS_REAL" ]; then
+      WT="$p"
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$WT" ]; then
+    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
     exit 1
-  }
-  [ -n "$WT" ] || { echo "error: treehouse get --lease printed no worktree path for $ID in $PROJ_ABS" >&2; exit 1; }
+  fi
 
-  validate_spawn_worktree "treehouse get --lease" "$T"
-
-  # Send the cd to the rename-safe stable target (#134): a name-addressed send
-  # could land in the active client's window if the name were ever lost; the
-  # stable id never lies.
-  spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+  validate_spawn_worktree "treehouse get" "$T"
+  fi
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't

@@ -71,6 +71,10 @@ if [ "$#" -gt 0 ]; then
   exec shellcheck --norc "$@"
 fi
 
+# config/overlay/*.sh is gitignored local state; nullglob keeps the glob from
+# expanding to a literal missing-file arg when no overlay scripts are present.
+shopt -s nullglob
+
 # Canonical file set: the ONE authoritative definition. Callers reference this
 # script; they never re-spell these globs.
-exec shellcheck --norc bin/*.sh bin/backends/*.sh tests/*.sh
+exec shellcheck --norc bin/*.sh bin/backends/*.sh tests/*.sh config/overlay/*.sh

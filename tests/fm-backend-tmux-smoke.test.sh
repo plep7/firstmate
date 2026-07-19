@@ -45,9 +45,17 @@ WINDOW="fm-smoke1"
 TARGET="$SESSION:$WINDOW"
 
 # --- create session ----------------------------------------------------------
-
-tmux new-session -d -s "$SESSION" -x 200 -y 50 \
+# Force a fast, deterministic shell instead of the captain's own default
+# shell: a slow-starting interactive login shell (heavy rc files) can leave
+# earlier sent lines queued for seconds before the pane executes them at all,
+# which is what actually made the capture-bounds checks below flake - not
+# pane size.
+tmux new-session -d -s "$SESSION" -x 200 -y 50 "bash --noprofile --norc" \
   || fail "real tmux: new-session failed"
+# fm_backend_tmux_create_task's new-window below inherits default-command, not
+# the shell given to new-session above - set it too so the actual task window
+# gets the same fast, deterministic shell.
+tmux set-option -t "$SESSION" default-command "bash --noprofile --norc"
 fm_backend_tmux_create_task "$SESSION" "$WINDOW" "$HOME" \
   || fail "fm_backend_tmux_create_task failed to create the task window"
 tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW" \
@@ -98,14 +106,39 @@ pass "real tmux: fm_backend_tmux_send_literal + fm_backend_tmux_send_key Enter s
 # earliest lines scroll out of a small window) while a large one reaches back
 # far enough to still see the earliest line - the same -S -N bounding fm-peek.sh
 # and fm-watch.sh rely on for a bounded, cheap pane read.
-fm_backend_tmux_send_text_line "$TARGET" "for i in \$(seq 1 80); do echo tag-line-\$i; done"
-sleep 0.6
+#
+# -S -N with no -E is bounded by -N lines of history PLUS the entire current
+# pane height (-E defaults to the pane's current bottom line), so a fixed
+# line count only overflows a small window on a taller pane: a fixed 80 lines
+# left the earliest line still on-screen (never scrolled into history) on a
+# pane taller than about 80 rows. Scale the printed line count to the actual
+# pane height instead, so the overflow margin holds for any pane size.
+pane_height=$(tmux display-message -p -t "$TARGET" '#{pane_height}') || pane_height=50
+last=$((pane_height + 50))
+wait_for_pane_text() {  # <target> <needle> <max-tries, 0.1s each>
+  local target=$1 needle=$2 max=$3 i=0
+  while [ "$i" -lt "$max" ]; do
+    case "$(fm_backend_tmux_capture "$target" 200 2>/dev/null)" in
+      *"$needle"*) return 0 ;;
+    esac
+    i=$((i + 1))
+    sleep 0.1
+  done
+  return 1
+}
+# Rendering many lines takes measurably longer than the single-line sends
+# above, so a fixed sleep here flakes whenever the shell or terminal is
+# slower than expected (a slow-starting login shell, a loaded CI runner) -
+# poll for the last line instead of guessing a sleep duration.
+fm_backend_tmux_send_text_line "$TARGET" "for i in \$(seq 1 $last); do echo tag-line-\$i; done"
+wait_for_pane_text "$TARGET" "tag-line-$last" 150 \
+  || fail "tag-line-$last never appeared in the pane within 15s of sending the $last-line loop"
 small=$(fm_backend_tmux_capture "$TARGET" 3) || fail "fm_backend_tmux_capture (small window) failed"
 case "$small" in
   *tag-line-1$'\n'*) fail "a 3-line capture should not still see the very first numbered line"$'\n'"$small" ;;
 esac
 case "$small" in
-  *tag-line-80*) : ;;
+  *tag-line-"$last"*) : ;;
   *) fail "a 3-line capture should still contain the most recent output"$'\n'"$small" ;;
 esac
 large=$(fm_backend_tmux_capture "$TARGET" 200) || fail "fm_backend_tmux_capture (large window) failed"

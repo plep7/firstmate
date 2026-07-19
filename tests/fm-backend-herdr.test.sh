@@ -228,7 +228,11 @@ test_events_capable_large_schema_no_broken_pipe_noise() {
   # `grep` ahead of it on PATH that closes its stdin immediately without
   # reading (the worst case of an early-closing consumer, deterministic on
   # every platform) and confirms the large printf write still completes
-  # without leaking write-error noise. The fix scopes 2>/dev/null onto those
+  # without leaking write-error noise. SIGPIPE is ignored inside the bash -c
+  # script to mirror the watcher's real disposition: under the default
+  # disposition bash kills printf silently by signal and no noise is ever
+  # emitted, so without the trap this test would pass even against the
+  # pre-fix code. The fix scopes 2>/dev/null onto those
   # printf writes so the expected SIGPIPE stays silent without masking a real
   # capability-check failure (grep's exit status, not printf's, still drives
   # the || return 1).
@@ -254,7 +258,7 @@ SH
   chmod +x "$fb/grep"
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
     FM_BACKEND_HERDR_EVENT_READER=true \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_events_capable sess' "$ROOT" 2>&1)
+    bash -c 'trap "" PIPE; . "$0/bin/backends/herdr.sh"; fm_backend_herdr_events_capable sess' "$ROOT" 2>&1)
   status=$?
   expect_code 0 "$status" "events_capable should accept a schema containing both required strings"
   assert_not_contains "$out" "Broken pipe" "events_capable leaked broken-pipe write-error noise to stderr"

@@ -1243,8 +1243,12 @@ fm_backend_herdr_events_capable() {  # <session>
   case "$protocol" in ''|*[!0-9]*) return 1 ;; esac
   [ "$protocol" -ge "$FM_BACKEND_HERDR_MIN_EVENTS_PROTOCOL" ] || return 1
   schema=$(herdr api schema --json 2>/dev/null) || return 1
-  printf '%s' "$schema" | grep -Fq 'events.subscribe' || return 1
-  printf '%s' "$schema" | grep -Fq 'pane.agent_status_changed' || return 1
+  # grep -Fq exits the instant it finds a match, closing its end of the pipe
+  # while printf is still writing the ~220KB schema; printf's stderr is
+  # silenced here so that expected SIGPIPE doesn't surface as write-error
+  # noise, while grep's exit status (the actual capability signal) is untouched.
+  printf '%s' "$schema" 2>/dev/null | grep -Fq 'events.subscribe' || return 1
+  printf '%s' "$schema" 2>/dev/null | grep -Fq 'pane.agent_status_changed' || return 1
   return 0
 }
 

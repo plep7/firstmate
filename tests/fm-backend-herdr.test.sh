@@ -217,6 +217,50 @@ test_version_check_refuses_missing_herdr() {
   pass "fm_backend_herdr_version_check: refuses loudly when herdr is not installed"
 }
 
+test_events_capable_large_schema_no_broken_pipe_noise() {
+  # Regression for the "printf: write error: Broken pipe" noise on nearly
+  # every watcher arm/wake: grep -Fq is free to exit the instant it finds a
+  # match, closing its end of the pipe while printf is still writing the
+  # (real-world ~220KB) schema payload; on bash builds that report EPIPE
+  # instead of dying silently by signal, that surfaces as
+  # "printf: write error: Broken pipe" on stderr. A real `grep` may or may not
+  # short-circuit early depending on platform/build, so this test puts a fake
+  # `grep` ahead of it on PATH that closes its stdin immediately without
+  # reading (the worst case of an early-closing consumer, deterministic on
+  # every platform) and confirms the large printf write still completes
+  # without leaking write-error noise. The fix scopes 2>/dev/null onto those
+  # printf writes so the expected SIGPIPE stays silent without masking a real
+  # capability-check failure (grep's exit status, not printf's, still drives
+  # the || return 1).
+  local dir log resp fb schema out status
+  dir="$TMP_ROOT/events-capable-large-schema"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"client":{"version":"0.9.0","protocol":16}}\n' > "$resp/1.out"
+  schema="$dir/schema.out"
+  { printf '{"events.subscribe":1,"pane.agent_status_changed":1,"pad":"'
+    yes x | head -c 200000
+    printf '"}\n'
+  } > "$schema"
+  cp "$schema" "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  cat > "$fb/grep" <<'SH'
+#!/usr/bin/env bash
+# Simulates an early-closing consumer deterministically: closes stdin without
+# reading anything, then reports a match (exit 0), regardless of the platform
+# real grep's own early-exit-on-match behavior.
+exec 0<&-
+exit 0
+SH
+  chmod +x "$fb/grep"
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    FM_BACKEND_HERDR_EVENT_READER=true \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_events_capable sess' "$ROOT" 2>&1)
+  status=$?
+  expect_code 0 "$status" "events_capable should accept a schema containing both required strings"
+  assert_not_contains "$out" "Broken pipe" "events_capable leaked broken-pipe write-error noise to stderr"
+  pass "fm_backend_herdr_events_capable: large schema against an early-closing grep produces no broken-pipe noise"
+}
+
 # --- workspace_label: per-firstmate-HOME resolution (P3, herdr-sm-spaces-k4) -
 
 test_workspace_label_primary_home_no_marker() {
@@ -2043,6 +2087,7 @@ test_wait_transition_clean_timeout_returns_1() {
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
+test_events_capable_large_schema_no_broken_pipe_noise
 test_workspace_label_primary_home_no_marker
 test_workspace_label_secondmate_home_uses_marker_id
 test_workspace_label_secondmate_marker_trims_whitespace

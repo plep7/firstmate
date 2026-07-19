@@ -206,9 +206,9 @@ X mode remains layered on top of the existing check mechanism without changing i
 
 ## Project memory belongs to projects
 
-Durable project-intrinsic agent knowledge lives in each project's committed `AGENTS.md`, with `CLAUDE.md` as a symlink.
+Durable project-intrinsic agent knowledge lives in each project's own memory file: `AGENTS.md` with `CLAUDE.md` as a symlink when a project already uses that convention, or a real `CLAUDE.md` left exactly as it is when that is the file the project already has.
 Ship briefs prompt crewmates to create or update those files through the normal delivery path; `data/projects.md` stays a thin private registry.
-Each project `AGENTS.md` carries a short `## Maintaining this file` self-governance section; `bin/fm-ensure-agents-md.sh` owns the canonical wording and injects it idempotently when creating the skeleton, promoting an existing `CLAUDE.md`, or reconciling an existing `AGENTS.md` that still lacks it.
+`bin/fm-ensure-agents-md.sh` owns the canonical `## Maintaining this file` self-governance wording, injecting it idempotently when creating a skeleton or reconciling an existing `AGENTS.md` that still lacks it; it never creates `AGENTS.md` or converts an existing real `CLAUDE.md` when a project already has one, and gives a project with neither file a `CLAUDE.md` skeleton, not `AGENTS.md`.
 It refuses a case-variant real memory file such as a lowercase `agents.md`, whose `CLAUDE.md` symlink would carry an uppercase literal target that dangles on a case-sensitive filesystem, and surfaces the mismatch for manual reconciliation.
 The full ownership rule - what is project-intrinsic versus fleet-private, and how firstmate keeps the two apart without writing into project clones - is owned by [`AGENTS.md`](../AGENTS.md) (project and knowledge management).
 

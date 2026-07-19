@@ -98,6 +98,7 @@ Teardown:
 - Escape is unsupported because the current Orca terminal send primitive exposes Enter and interrupt-style input but no verified Escape operation.
 - Orca is explicit-only and is not selected by runtime auto-detection.
 - Orca currently exposes no stable CLI version or protocol marker. Unlike the herdr/zellij/cmux docs, this backend intentionally gates spawn support on runtime reachability from `orca status --json` rather than a version floor.
+- Unverified assumption, flagged for a future real-Orca smoke run: `config/overlay/fm-spawn.sh`'s hardened `validate_spawn_worktree` (see "GUARD 1d" in `tests/fm-tangle-guard.test.sh`) refuses any resolved worktree whose `HEAD` is on a named branch, on the assumption that a fresh pooled lease is always detached. That assumption is verified for treehouse leases but not for Orca: `orca worktree create --name "$name" ...` (`bin/backends/orca.sh`'s `fm_backend_orca_worktree_create`) passes `--name` as an argument, and if Orca checks that worktree out onto a branch named `$name` at creation time rather than leaving it detached, every Orca spawn would hit this refusal. No fake-Orca or real-Orca test currently exercises a genuinely distinct, non-primary Orca worktree fixture that is also on a named branch, so this gap is untested in either direction. Confirm the actual post-create `HEAD` state against a real Orca run before trusting Orca spawns under the hardened guard.
 
 ## Verification
 

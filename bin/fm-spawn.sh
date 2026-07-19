@@ -858,6 +858,14 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     if declare -f fm_overlay_spawn_lease_guard_disarm >/dev/null 2>&1; then
       fm_overlay_spawn_lease_guard_disarm
     fi
+    # Unlike the interactive `treehouse get` branch below, this cd is fire-and-forget:
+    # the lease path is already known, so nothing polls spawn_current_path to confirm
+    # the pane actually landed in $WT before the script moves on to writing the brief
+    # and launching the harness. A dropped/delayed send here would leave the crewmate
+    # working from wherever its window's cwd already was. Flagged, not fixed: adding
+    # confirmation here means teaching the isolation-guard fakebins (which currently
+    # never answer a pane-path query on this path) to serve one, which is more than a
+    # one-line change - see the fm-gate-findings-triage branch notes.
     spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
   else
   spawn_send_text_line "$WT_TARGET" 'treehouse get'

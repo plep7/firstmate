@@ -222,9 +222,23 @@ test_force_bypasses_guard_regression() {
   pass "nm-pr-format --force still bypasses the already-reformatted guard"
 }
 
+test_testing_bullet_leading_dashes_preserved() {
+  local case_dir out
+  case_dir=$(make_case testing-bullet-dashes)
+  add_gh_mock "$case_dir"
+
+  out=$(run_fmt "$case_dir" 9 --testing $'- -- flag names unaffected\n- ** bold marker unaffected' 2>/dev/null)
+  assert_contains "$out" $'- -- flag names unaffected' \
+    "testing-bullet-dashes: a bullet's own leading '--' was over-stripped"
+  assert_contains "$out" $'- ** bold marker unaffected' \
+    "testing-bullet-dashes: a bullet's own leading '**' was over-stripped"
+  pass "nm-pr-format --testing strips only the bullet marker, not the bullet's own leading dashes/asterisks"
+}
+
 test_evidence_positioned_between_how_and_testing
 test_evidence_omitted_before_after_byte_identical
 test_how_unchanged_regression
 test_double_apply_is_idempotent
 test_genuine_error_has_distinct_exit_code
 test_force_bypasses_guard_regression
+test_testing_bullet_leading_dashes_preserved

@@ -849,7 +849,13 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # same-line match.
   if declare -f fm_overlay_spawn_acquire_worktree >/dev/null 2>&1; then
     WT=$(fm_overlay_spawn_acquire_worktree "$PROJ_ABS" "$ID" "$WT_TARGET" "$T") || exit 1
+    if declare -f fm_overlay_spawn_lease_guard_arm >/dev/null 2>&1; then
+      fm_overlay_spawn_lease_guard_arm "$PROJ_ABS" "$WT"
+    fi
     validate_spawn_worktree "overlay-lease" "$T"
+    if declare -f fm_overlay_spawn_lease_guard_disarm >/dev/null 2>&1; then
+      fm_overlay_spawn_lease_guard_disarm
+    fi
     spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
   else
   spawn_send_text_line "$WT_TARGET" 'treehouse get'

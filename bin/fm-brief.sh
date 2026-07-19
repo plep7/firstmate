@@ -40,10 +40,12 @@
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
 # Ship tasks include a project-memory section so durable project-intrinsic
-# learnings can be committed to AGENTS.md through the project's delivery path;
-# it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
-# over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
-# self-governance section when a touched project AGENTS.md lacks it.
+# learnings can be committed through the project's delivery path, to whichever
+# memory file (AGENTS.md or CLAUDE.md) fm-ensure-agents-md.sh reports as
+# canonical for that project; it carries the authoring bar (widely useful
+# knowledge only, pointers over copied detail) and has the crewmate add the
+# fm-ensure-agents-md.sh self-governance section when a touched project
+# AGENTS.md lacks it.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -370,8 +372,9 @@ $RULE1
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
 Record only project knowledge useful to almost every future session.
 For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
-If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
-Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+A project that already has a real \`CLAUDE.md\` keeps it as its canonical memory file; the script never creates \`AGENTS.md\` or promotes \`CLAUDE.md\` there, so add durable knowledge to the existing \`CLAUDE.md\` directly.
+If you touch a project \`AGENTS.md\` or newly created \`CLAUDE.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
+Keep it proportionate: skip these edits for trivial tasks that produced no durable project knowledge.
 
 $DOD
 EOF

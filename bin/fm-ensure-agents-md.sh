@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Ensure a project worktree follows the agent-memory file convention.
-# AGENTS.md is the real project-intrinsic knowledge file; CLAUDE.md is a
-# relative symlink to it for compatibility. Creates a minimal AGENTS.md skeleton
-# when neither file exists, promotes a real CLAUDE.md file when it is the only
-# file present, and refuses to clobber distinct real files or wrong symlinks.
+# AGENTS.md is the canonical project-intrinsic knowledge file when a project
+# already uses it: CLAUDE.md is kept as a relative symlink to it, and a bare
+# AGENTS.md gains a CLAUDE.md symlink. A project that already has a real
+# CLAUDE.md file is left exactly as-is: this script never creates AGENTS.md,
+# converts CLAUDE.md to a symlink, or promotes it, because that CLAUDE.md is
+# that project's own canonical memory file. A project with neither file gets a
+# minimal CLAUDE.md skeleton (not AGENTS.md) as the new file, with no symlink.
+# Refuses to clobber distinct real files or wrong symlinks.
 # Owns the canonical "## Maintaining this file" self-governance wording for
-# project AGENTS.md files, injecting it idempotently into created skeletons,
-# promoted CLAUDE.md files, and any existing AGENTS.md that still lacks it.
+# project memory files, injecting it idempotently into created skeletons and
+# any existing AGENTS.md that still lacks it.
 # Refuses a case-variant real memory file such as a lowercase agents.md, whose
 # CLAUDE.md symlink would carry an uppercase literal target that dangles on a
 # case-sensitive filesystem (issue #389).
@@ -53,22 +57,23 @@ write_maintenance_section_with_eol() {
   done < <(write_maintenance_section)
 }
 
-# Idempotently append the canonical self-governance section to AGENTS.md when it
-# is absent. Sets MAINT_INJECTED=1 when it appends and 0 when the section is
+# Idempotently append the canonical self-governance section to $1 when it is
+# absent. Sets MAINT_INJECTED=1 when it appends and 0 when the section is
 # already present, so callers can report whether the file changed.
 MAINT_INJECTED=0
 ensure_maintenance_section() {
+  local file=$1
   MAINT_INJECTED=0
-  if grep -Fqx '## Maintaining this file' "$AGENTS" ||
-    grep -Fqx $'## Maintaining this file\r' "$AGENTS"; then
+  if grep -Fqx '## Maintaining this file' "$file" ||
+    grep -Fqx $'## Maintaining this file\r' "$file"; then
     return 0
   fi
   local eol=$'\n' sep=''
-  if LC_ALL=C grep -q $'\r$' "$AGENTS"; then
+  if LC_ALL=C grep -q $'\r$' "$file"; then
     eol=$'\r\n'
   fi
-  if [ -s "$AGENTS" ]; then
-    if [ -n "$(tail -c 1 "$AGENTS")" ]; then
+  if [ -s "$file" ]; then
+    if [ -n "$(tail -c 1 "$file")" ]; then
       sep="${eol}${eol}"
     else
       sep=$eol
@@ -77,19 +82,20 @@ ensure_maintenance_section() {
   {
     printf '%s' "$sep"
     write_maintenance_section_with_eol "$eol"
-  } >> "$AGENTS"
+  } >> "$file"
   MAINT_INJECTED=1
 }
 
 write_skeleton() {
-  cat > "$AGENTS" <<'EOF'
+  local file=$1
+  cat > "$file" <<'EOF'
 # Project agent memory
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 - Add durable project-specific notes here as they are discovered through real work.
 EOF
-  ensure_maintenance_section
+  ensure_maintenance_section "$file"
 }
 
 is_correct_claude_symlink() {
@@ -142,7 +148,7 @@ fi
 if [ -e "$AGENTS" ]; then
   if [ -L "$CLAUDE" ]; then
     if is_correct_claude_symlink; then
-      ensure_maintenance_section
+      ensure_maintenance_section "$AGENTS"
       if [ "$MAINT_INJECTED" -eq 1 ]; then
         echo "updated: added ## Maintaining this file to AGENTS.md in $DIR"
       else
@@ -154,7 +160,7 @@ if [ -e "$AGENTS" ]; then
     exit 1
   fi
   if [ ! -e "$CLAUDE" ]; then
-    ensure_maintenance_section
+    ensure_maintenance_section "$AGENTS"
     ln -s "$AGENTS" "$CLAUDE"
     if [ "$MAINT_INJECTED" -eq 1 ]; then
       echo "updated: added ## Maintaining this file to AGENTS.md and symlinked CLAUDE.md -> AGENTS.md in $DIR"
@@ -171,9 +177,11 @@ if [ -e "$AGENTS" ]; then
   exit 1
 fi
 
+# AGENTS.md is absent below this point.
+
 if [ -L "$CLAUDE" ]; then
   if is_correct_claude_symlink; then
-    write_skeleton
+    write_skeleton "$AGENTS"
     echo "created: AGENTS.md and kept CLAUDE.md -> AGENTS.md in $DIR"
     exit 0
   fi
@@ -183,16 +191,12 @@ fi
 
 if [ -e "$CLAUDE" ]; then
   if [ -f "$CLAUDE" ]; then
-    mv "$CLAUDE" "$AGENTS"
-    ensure_maintenance_section
-    ln -s "$AGENTS" "$CLAUDE"
-    echo "promoted: moved CLAUDE.md to AGENTS.md and symlinked CLAUDE.md -> AGENTS.md in $DIR"
+    echo "unchanged: CLAUDE.md is this project's memory file in $DIR; using it as-is"
     exit 0
   fi
   echo "conflict: CLAUDE.md exists in $DIR but is not a regular file or symlink" >&2
   exit 1
 fi
 
-write_skeleton
-ln -s "$AGENTS" "$CLAUDE"
-echo "created: AGENTS.md and CLAUDE.md -> AGENTS.md in $DIR"
+write_skeleton "$CLAUDE"
+echo "created: CLAUDE.md in $DIR"

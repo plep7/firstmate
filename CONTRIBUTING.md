@@ -68,7 +68,7 @@ That is firstmate-specific; do not commit `.no-mistakes/evidence/` here even whe
 Check and test the toolbelt before pushing:
 
 ```sh
-for script in bin/*.sh bin/backends/*.sh; do bash -n "$script"; done   # syntax-check the toolbelt
+shopt -s nullglob; for script in bin/*.sh bin/backends/*.sh config/overlay/*.sh; do bash -n "$script"; done   # syntax-check the toolbelt
 bin/fm-lint.sh   # lint the toolbelt and behavior tests; the single owner CI and the no-mistakes gate both run
 for test_script in tests/*.test.sh; do bash "$test_script"; done   # behavior tests, matching CI and no-mistakes commands.test
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]

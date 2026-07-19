@@ -172,6 +172,7 @@ SH
 set -u
 case "$*" in
   "get --lease --lease-holder "*) printf '%s\n' "${FM_FAKE_LEASE_PATH:-}"; exit 0 ;;
+  "return --force "*) [ -z "${FM_FAKE_RETURN_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_RETURN_LOG"; exit 0 ;;
 esac
 exit 0
 SH
@@ -180,19 +181,19 @@ SH
 }
 
 run_spawn() {
-  local home=$1 id=$2 proj=$3 lease_path=$4 fakebin=$5
+  local home=$1 id=$2 proj=$3 lease_path=$4 fakebin=$5 return_log=${6:-}
   mkdir -p "$home/data/$id"
   printf 'brief\n' > "$home/data/$id/brief.md"
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_LEASE_PATH="$lease_path" TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_LEASE_PATH="$lease_path" FM_FAKE_RETURN_LOG="$return_log" TMUX="fake,1,0" \
     PATH="$fakebin:$PATH" \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex 2>&1
 }
 
 test_spawn_isolation_abort() {
-  local home proj fakebin out status
+  local home proj fakebin out status retlog
   home="$TMP_ROOT/spawn-home"
   mkdir -p "$home/data"
   proj=$(make_repo "$TMP_ROOT/spawn-proj")
@@ -202,22 +203,30 @@ test_spawn_isolation_abort() {
   mkdir -p "$TMP_ROOT/spawn-notgit" "$proj/sub"
 
   # Abort: the pane resolves to a plain non-git directory (not a worktree at all).
-  out=$(run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit" "$fakebin"); status=$?
+  retlog="$TMP_ROOT/spawn-notgit-return.log"
+  out=$(run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit" "$fakebin" "$retlog"); status=$?
   expect_code 1 "$status" "spawn into a non-worktree dir should abort"
   assert_contains "$out" "did not yield an isolated worktree" "non-worktree spawn lacked the isolation error"
   assert_absent "$home/state/abort-notgit-dd4.meta" "aborted spawn must not record meta"
+  assert_grep "return --force $TMP_ROOT/spawn-notgit" "$retlog" \
+    "refused lease was not returned to the pool"
 
   # Abort: the pane resolves INTO the primary checkout (a subdir of PROJ_ABS).
-  out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin"); status=$?
+  retlog="$TMP_ROOT/spawn-primary-return.log"
+  out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin" "$retlog"); status=$?
   expect_code 1 "$status" "spawn landing inside the primary checkout should abort"
   assert_contains "$out" "did not yield an isolated worktree" "primary-checkout spawn lacked the isolation error"
+  assert_grep "return --force $proj/sub" "$retlog" \
+    "refused lease onto the primary checkout was not returned to the pool"
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
-  out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin"); status=$?
+  retlog="$TMP_ROOT/spawn-ok-return.log"
+  out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin" "$retlog"); status=$?
   expect_code 0 "$status" "spawn into a genuine isolated worktree should succeed"
   assert_contains "$out" "spawned ok-isolated-ff6" "isolated spawn did not report success"
   assert_not_contains "$out" "did not yield an isolated worktree" "isolated spawn wrongly tripped the guard"
-  pass "fm-spawn: aborts unless the resolved worktree is a genuine, isolated worktree"
+  assert_absent "$retlog" "a successfully accepted lease must not be returned to the pool"
+  pass "fm-spawn: aborts unless the resolved worktree is a genuine, isolated worktree, returning a refused lease to the pool"
 }
 
 # --- GUARD 1c: fm-spawn tmux window construction ----------------------------
@@ -328,7 +337,7 @@ test_spawn_tmux_window_construction() {
 # passed it. These cases pin the three added lease-shape checks independently,
 # plus that a genuine fresh pooled lease still sails through.
 test_spawn_isolation_abort_unpooled_checkout() {
-  local home proj fakebin out status
+  local home proj fakebin out status retlog
   local branch_repo dirty_repo nested_repo nested_child
   home="$TMP_ROOT/spawn-home2"
   mkdir -p "$home/data"
@@ -351,10 +360,13 @@ test_spawn_isolation_abort_unpooled_checkout() {
   git -C "$nested_repo" checkout -q --detach
   git -C "$nested_repo" worktree add -q --detach "$nested_child" >/dev/null 2>&1
 
-  out=$(run_spawn "$home" abort-branch-gg7 "$proj" "$branch_repo" "$fakebin"); status=$?
+  retlog="$TMP_ROOT/spawn-branch-return.log"
+  out=$(run_spawn "$home" abort-branch-gg7 "$proj" "$branch_repo" "$fakebin" "$retlog"); status=$?
   expect_code 1 "$status" "spawn onto a named-branch live checkout should abort"
   assert_contains "$out" "did not yield an isolated worktree" "named-branch live checkout lacked the isolation error"
   assert_contains "$out" "some-feature" "named-branch abort did not name the offending branch"
+  assert_grep "return --force $branch_repo" "$retlog" \
+    "refused named-branch lease was not returned to the pool"
 
   out=$(run_spawn "$home" abort-dirty-hh8 "$proj" "$dirty_repo" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn onto a dirty live checkout should abort"

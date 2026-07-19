@@ -104,3 +104,30 @@ fm_overlay_spawn_acquire_worktree() {  # <proj-abs> <id> <wt-target> <t>
   [ -n "$wt" ] || { echo "error: treehouse get --lease printed no worktree path for $id in $proj_abs" >&2; return 1; }
   printf '%s\n' "$wt"
 }
+
+# Lease-refusal cleanup: a lease acquired above but rejected by
+# validate_spawn_worktree (an unpooled/dirty/named-branch fallback, the same
+# atelier shape the guard hardens against) must go back to the pool, not sit
+# leased forever under $id with nobody using it. validate_spawn_worktree exits
+# the whole script directly on refusal, so the caller arms this EXIT trap right
+# after acquiring the lease and disarms it right after validation passes -
+# the trap only ever fires inside that narrow window.
+FM_OVERLAY_LEASE_PROJ=
+FM_OVERLAY_LEASE_WT=
+fm_overlay_spawn_lease_guard_arm() {  # <proj-abs> <wt>
+  FM_OVERLAY_LEASE_PROJ=$1
+  FM_OVERLAY_LEASE_WT=$2
+  trap fm_overlay_spawn_lease_guard_release EXIT
+}
+fm_overlay_spawn_lease_guard_disarm() {
+  FM_OVERLAY_LEASE_WT=
+  trap orca_spawn_abort_cleanup EXIT
+}
+fm_overlay_spawn_lease_guard_release() {
+  local status=$?
+  if [ -n "$FM_OVERLAY_LEASE_WT" ]; then
+    (cd "$FM_OVERLAY_LEASE_PROJ" 2>/dev/null && treehouse return --force "$FM_OVERLAY_LEASE_WT") >/dev/null 2>&1 \
+      || echo "warning: could not return refused lease $FM_OVERLAY_LEASE_WT; inspect 'treehouse status'" >&2
+  fi
+  return "$status"
+}

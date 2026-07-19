@@ -115,6 +115,19 @@ def clean_bullet(b):
     return b.strip()
 
 
+def strip_bullet_marker(line):
+    """Strip a single leading '- ' or '* ' bullet marker, if present.
+
+    Not str.lstrip(), which strips a whole leading run of the given
+    characters and would eat real content starting with '-'/'*' (e.g. a
+    literal '-- flag' or '** bold' bullet).
+    """
+    s = line.strip()
+    if s[:2] in ("- ", "* "):
+        return s[2:]
+    return s
+
+
 def bullets_from(text):
     out = []
     for line in text.splitlines():
@@ -171,7 +184,7 @@ def main():
     orig_testing = sections.get("Testing", "")
 
     if args.testing:
-        bullets = [clean_bullet(b.lstrip("-* ")) for b in args.testing.splitlines() if b.strip()]
+        bullets = [clean_bullet(strip_bullet_marker(b)) for b in args.testing.splitlines() if b.strip()]
     else:
         bullets = test_step_bullets(sections.get("Pipeline", ""))
 

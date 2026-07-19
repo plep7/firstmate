@@ -603,10 +603,16 @@ fm_afk_launch_stop() {
 
 fm_afk_launch_main() {
   local result
-  fm_afk_launch_lock_acquire || return 1
+  # Traps must be live BEFORE acquiring the lock: the lock directory becomes
+  # visible to other processes the instant lock_acquire's mkdir succeeds,
+  # which is earlier than lock_acquire returning. A signal landing in that
+  # gap would otherwise hit the default disposition and kill this process
+  # before any trap is registered, abandoning the lock. lock_release's PID
+  # ownership check makes an early, pre-acquisition EXIT trap a safe no-op.
   trap fm_afk_launch_lock_release EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  fm_afk_launch_lock_acquire || return 1
   case "${1:-start}" in
     start) fm_afk_launch_start ;;
     start-native) fm_afk_launch_start_native ;;

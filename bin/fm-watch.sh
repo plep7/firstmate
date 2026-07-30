@@ -1031,25 +1031,27 @@ EOF
       else
         # Pane busy or not yet stably stale: reset pending escalation bookkeeping,
         # unless a genuinely busy pane has gone too long with no completed turn -
-        # then route it through the same wedge timer instead of erasing it.
+        # then route it through the same wedge timer instead of erasing it. A
+        # leftover pause flag is retired FIRST, before that wedge timer write,
+        # so a stale .paused-<key> from an earlier legitimate pause absorption
+        # can never clobber the busy-turn-age escalation this same poll just
+        # started or advanced (clear_pause_tracking also removes the wedge
+        # timer and escalation-count markers - see there).
+        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
+          clear_pause_tracking "$w"
+        fi
         if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
           wedge_timer_check "$w" "$ssf" "busy (no completed turn)" "$ewf"
         else
           rm -f "$ssf" "$ewf"
         fi
-        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
-          clear_pause_tracking "$w"
-        fi
       fi
     else
       printf '%s' "$h" > "$hf"
       echo 0 > "$cf"
-      if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
-        wedge_timer_check "$w" "$ssf" "busy (no completed turn)" "$ewf"
-      else
-        rm -f "$ssf" "$ewf"
-      fi
       task=$(window_to_task "$w" "$STATE")
+      # Same ordering rule as above: retire a leftover pause flag before the
+      # busy-turn-age wedge timer write below, never after.
       if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && [ "$busy_now" -ne 0 ]; then
         case "$(pause_state_class "$w" "$task")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
@@ -1057,6 +1059,11 @@ EOF
         esac
       else
         [ -e "$pf" ] && clear_pause_tracking "$w"
+      fi
+      if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
+        wedge_timer_check "$w" "$ssf" "busy (no completed turn)" "$ewf"
+      else
+        rm -f "$ssf" "$ewf"
       fi
     fi
   done < <(recorded_windows)

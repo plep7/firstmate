@@ -1345,6 +1345,110 @@ test_busy_pane_stable_hash_escalates_past_turn_age_bound() {
   pass "a busy worker with a stable pane hash still escalates once its completed-turn age reaches the bound"
 }
 
+# Interaction fixture: the two precedence questions this rebase raised.
+#
+# 1. A pane that IS currently busy (window_is_busy true) is, by construction,
+#    not idling on the declared external wait a paused: line describes - the
+#    declared verb and the pane's own current behavior contradict each other,
+#    and pause_state_class is never even consulted for a busy pane (it is
+#    reached only from the non-busy stale branches). So a busy pane past
+#    BUSY_TURN_MAX_SECS with no completed turn must escalate exactly as it
+#    would with no pause declared at all: the pause never gets a chance to
+#    suppress it, matching the existing pause contract's own boundary ("the
+#    pause quiets idleness pings, never death detection") extended to a
+#    possible wedge hiding behind a stale paused: line.
+test_declared_pause_does_not_suppress_busy_turn_age_escalation() {
+  local dir state fakebin out capture_file window key pane_hash pid
+  dir=$(make_case busy-paused-turn-age); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-paused-age"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-paused-age.meta"
+  printf 'paused: waiting on an external release\n' > "$state/busy-paused-age.status"
+  sig=$(seen_sig "$state/busy-paused-age.status"); printf '%s' "$sig" > "$state/.seen-busy-paused-age_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # No completed turn ever recorded for this task: age the spawn record itself.
+  touch -t 200001010000 "$state/busy-paused-age.meta"
+
+  # Phase A: past the bound, the busy pane is absorbed but starts the wedge
+  # timer exactly like the non-paused stable-hash case - never the pause cadence.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "a declared pause under a busy pane past the turn-age bound escalated before the wedge threshold: $(cat "$out")"
+  fi
+  [ -s "$state/.stale-since-$key" ] || fail "a declared pause under a busy pane past the turn-age bound did not start a wedge timer"
+  [ ! -e "$state/.paused-$key" ] || fail "a busy pane past the turn-age bound entered the pause-absorb cadence instead of the wedge timer"
+  reap "$pid"
+
+  # Phase B: backdate the wedge timer past the threshold; the declared pause
+  # still does not suppress the escalation.
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a declared pause under a busy pane did not wedge-escalate past the turn-age bound"
+  grep -F "stale: $window" "$out" >/dev/null || fail "busy turn-age escalation under a declared pause did not print the stale wake"
+  grep -F "possible wedge" "$out" >/dev/null || fail "busy turn-age escalation under a declared pause did not flag a possible wedge"
+  pass "a declared pause never suppresses busy-turn-age escalation - a currently busy pane past the bound wedge-escalates exactly as an unpaused one would"
+}
+
+# 2. Interaction fixture: a window carries a leftover .paused-<key> flag from
+# an earlier legitimate idle-pause absorption, its status log STILL says
+# paused: (unchanged - the crew never wrote a new line), but the pane has
+# since gone busy with no completed turn past BUSY_TURN_MAX_SECS. Note this
+# is NOT the same case as #1 above: because the status line still declares a
+# pause, the per-window early retirement check (which only fires once the
+# status stops declaring a pause) does not run, so the LATE retirement check
+# inside the busy-pane branch is the one that fires here, once the stale-hash
+# repeat count reaches 2. clear_pause_tracking also deletes the busy-turn-age
+# wedge timer and escalation-count markers it shares a state directory with,
+# so that late retirement must run BEFORE wedge_timer_check writes them this
+# same poll, never after - otherwise the retirement silently erases the
+# wedge timer's first tick every time it fires, and a genuinely wedged busy
+# worker whose pane last carried a pause declaration would lose the start of
+# its escalation clock. FM_POLL is set well above the observation window so
+# exactly one poll iteration's effects are captured, isolating this from
+# case #1's every-poll retirement.
+test_busy_turn_age_wedge_survives_leftover_pause_flag() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
+  dir=$(make_case busy-turn-age-leftover-pause); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-leftover-pause"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-leftover.meta"
+  # Status log unchanged since the earlier pause absorption: still paused:.
+  printf 'paused: waiting on an external release\n' > "$state/busy-leftover.status"
+  sig=$(seen_sig "$state/busy-leftover.status"); printf '%s' "$sig" > "$state/.seen-busy-leftover_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  # Pre-seeded at 1 so this poll's stale-hash repeat count reaches 2, the
+  # threshold the late retirement check requires.
+  printf '1\n' > "$state/.count-$key"
+  # No completed turn ever recorded for this task: age the spawn record itself.
+  touch -t 200001010000 "$state/busy-leftover.meta"
+  # Leftover pause-absorb bookkeeping from an earlier, since-ended idle pause.
+  : > "$state/.paused-$key"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=999 FM_POLL=30 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "a busy pane past the turn-age bound escalated before the wedge threshold: $(cat "$out")"
+  fi
+  [ ! -e "$state/.paused-$key" ] || { reap "$pid"; fail "the leftover pause flag was not retired on this poll"; }
+  [ -s "$state/.stale-since-$key" ] || fail "retiring a leftover pause flag erased the busy-turn-age wedge timer's first tick"
+  reap "$pid"
+  pass "retiring a leftover pause flag never erases the busy-turn-age wedge timer started the same poll"
+}
+
 # Regression fixture for the incident's actual masking condition: Pi's rendered
 # elapsed-time footer changes every poll, so the pane hash never repeats and the
 # watcher always takes the "new hash" branch, never the stable-hash one above.
@@ -1747,6 +1851,8 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold
 test_wedge_escalation_resets_when_pane_becomes_active
 test_busy_pane_below_turn_age_bound_is_absorbed
 test_busy_pane_stable_hash_escalates_past_turn_age_bound
+test_declared_pause_does_not_suppress_busy_turn_age_escalation
+test_busy_turn_age_wedge_survives_leftover_pause_flag
 test_busy_pane_changing_hash_escalates_past_turn_age_bound
 test_busy_pane_turn_end_touch_resets_age
 test_busy_pane_repeated_escalation_reaches_demand_deep_inspection

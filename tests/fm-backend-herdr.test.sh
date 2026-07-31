@@ -224,6 +224,67 @@ test_version_check_refuses_missing_herdr() {
   pass "fm_backend_herdr_version_check: refuses loudly when herdr is not installed"
 }
 
+# --- events_capable: pipe-free schema probe (fm-watch-cycle-deaths) ---------
+#
+# Regression coverage for kunchenguid/firstmate#1375/#1383: the old probe piped
+# a ~220KB `herdr api schema --json` payload through `printf '%s' "$schema" |
+# grep -Fq ...`. grep exits as soon as it finds a match, closing the pipe while
+# printf is still writing the rest of the payload; printf then dies of SIGPIPE,
+# and under `pipefail` that non-zero printf exit status wins the pipeline even
+# though grep already found the match, so the probe spuriously reported
+# "not capable" (or, under the watcher's stricter invocation, killed the whole
+# cycle). Fixed by matching with a pure-bash `case` (no subprocess, no pipe).
+#
+# Real grep's early-exit-on-match timing is racy (the live crash reproduced
+# intermittently), so a plain large-schema fixture cannot deterministically
+# force the old pipe to break in a portable test. Instead this test puts a
+# hostile `grep` on PATH that always reads exactly one byte of stdin before
+# exiting, guaranteeing a downstream SIGPIPE for anything that still pipes a
+# large payload into it. A probe that never shells out to `grep` for this
+# decision is unaffected either way; the old printf|grep probe is not.
+
+# make_big_schema: a >128KB synthetic `herdr api schema --json` payload with
+# both required capability substrings near the start, followed by padding well
+# past any pipe buffer, so a piped writer has plenty left to write after a
+# reader closes early.
+make_big_schema() {  # -> echoes synthetic schema JSON on stdout
+  local pad
+  pad=$(printf 'x%.0s' $(seq 1 200000))
+  printf '{"methods":["events.subscribe","pane.agent_status_changed"],"pad":"%s"}' "$pad"
+}
+
+# make_onebyte_poison_grep: installs a `grep` on PATH that reads a single byte
+# of stdin then exits 0, regardless of arguments. Deterministically reproduces
+# the early-reader-close half of the SIGPIPE race without depending on the
+# host's real grep's match-then-exit timing.
+make_onebyte_poison_grep() {  # <dir> -> echoes fakebin dir
+  local fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/grep" <<'SH'
+#!/usr/bin/env bash
+dd bs=1 count=1 of=/dev/null 2>/dev/null
+exit 0
+SH
+  chmod +x "$fb/grep"
+  printf '%s\n' "$fb"
+}
+
+test_events_capable_survives_large_schema_with_early_match() {
+  local dir log resp fb poisonfb out status
+  dir="$TMP_ROOT/events-capable-big-schema"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"client":{"version":"0.8.0","channel":"stable","protocol":16}}\n' > "$resp/1.out"
+  make_big_schema > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  poisonfb=$(make_onebyte_poison_grep "$dir")
+  out=$(PATH="$poisonfb:$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    FM_BACKEND_HERDR_EVENT_READER="$dir/unused-reader" \
+    bash -c 'set -o pipefail -e; . "$0/bin/backends/herdr.sh"; fm_backend_herdr_events_capable sess; echo "rc=$?"' "$ROOT" 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "events_capable crashed under watcher pipefail/-e semantics on a large schema with a hostile grep on PATH: $out"
+  case "$out" in *rc=0*) : ;; *) fail "events_capable should report capable (rc 0) on a >128KB schema containing both substrings, even with a hostile grep on PATH, got: $out" ;; esac
+  pass "fm_backend_herdr_events_capable: survives a >128KB schema and a hostile grep on PATH without a broken-pipe crash"
+}
+
 # --- workspace_label: per-firstmate-HOME resolution (P3, herdr-sm-spaces-k4) -
 
 test_workspace_label_primary_home_no_marker() {
@@ -3088,6 +3149,7 @@ test_wait_transition_clean_timeout_returns_1() {
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
+test_events_capable_survives_large_schema_with_early_match
 test_workspace_label_primary_home_no_marker
 test_workspace_label_secondmate_home_uses_marker_id
 test_workspace_label_secondmate_marker_trims_whitespace

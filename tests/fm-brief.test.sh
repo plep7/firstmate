@@ -669,6 +669,62 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
 
+# The captain's PR-description standard (purpose-first line, terse Changes
+# bullets, type-appropriate visual evidence, one-line limitations, one-line
+# test evidence, banned diaries/archaeology/names/em-dashes/ticket citations)
+# must be structurally generated for every PR-producing mode rather than
+# depending on a supervisor remembering to say it. local-only ships no PR and
+# must not carry the contract at all.
+test_pr_description_contract() {
+  local home id brief
+  home="$TMP_ROOT/pr-description-contract-home"
+  mkdir -p "$home/data"
+
+  for id_mode in "brief-prcontract-nm:no-mistakes" "brief-prcontract-dp:direct-PR"; do
+    id=${id_mode%%:*}
+    mode=${id_mode##*:}
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+      "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "$mode: brief was not scaffolded"
+    assert_grep "# PR-DESCRIPTION CONTRACT" "$brief" \
+      "$mode: brief missing the PR-description contract section"
+    assert_grep "$ROOT/config/pr-visual-format.md" "$brief" \
+      "$mode: contract must reference the visual-format doc by absolute path"
+    assert_grep "Purpose-first line naming this change's role" "$brief" \
+      "$mode: contract lost the purpose-first requirement"
+    assert_grep "Terse reviewer-facing Changes bullets" "$brief" \
+      "$mode: contract lost the terse Changes-bullets requirement"
+    assert_grep "backend = mermaid diagram, bug fix = labeled Before/After, frontend = screenshots" "$brief" \
+      "$mode: contract lost type-appropriate visual evidence"
+    assert_grep "One-line known limitations." "$brief" \
+      "$mode: contract lost the one-line limitations requirement"
+    assert_grep "One-line test evidence." "$brief" \
+      "$mode: contract lost the one-line test-evidence requirement"
+    assert_grep "Delete any machine-generated Intent/Risk sections." "$brief" \
+      "$mode: contract lost the machine-section deletion requirement"
+    assert_grep "BANNED, verbatim: first-person implementation diaries, fix-round archaeology, restated finding histories, individual teammate names, em-dashes" "$brief" \
+      "$mode: contract lost the verbatim BANNED list"
+    assert_grep "ticket/Jira-key citations anywhere in committed content, documentation prose and code comments alike" "$brief" \
+      "$mode: contract did not extend the ticket-citation ban to documentation prose"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticked TODO example must stay literal
+    assert_grep 'explicit TODO marker pointing at tracked future work, formulated exactly as `TODO(ADC-123)`' "$brief" \
+      "$mode: contract lost the TODO(ADC-123) exception to the citation ban"
+    assert_grep "Verify the PR title convention and this body structure together in the same pre-ready check, and re-verify both after every subsequent push or pipeline round." "$brief" \
+      "$mode: contract lost the re-verify-after-every-round requirement"
+  done
+
+  id="brief-prcontract-lo"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode local-only >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "local-only: brief was not scaffolded"
+  assert_no_grep "PR-DESCRIPTION CONTRACT" "$brief" \
+    "local-only brief must not carry the PR-description contract (no PR is produced)"
+
+  pass "fm-brief.sh: PR-description contract is generated for no-mistakes/direct-PR and absent from local-only"
+}
+
 test_scout_and_secondmate_load_decision_hold_policy() {
   local home scout charter
   home="$TMP_ROOT/decision-policy-home"
@@ -726,5 +782,6 @@ test_secondmate_no_projects_charter
 test_secondmate_marked_request_reporting_contract
 test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
+test_pr_description_contract
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold

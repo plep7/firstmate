@@ -283,9 +283,61 @@ test_promote_carries_the_pr_description_contract() {
       fail "$mode: re-promotion duplicated the PR-description contract"
     assert_contains "$out" "already carries the PR-description contract" \
       "$mode: re-promotion did not report the contract as already present"
+    assert_contains "$out" "re-read your brief at $brief" \
+      "$mode: the ship-instruction template stopped pointing at the brief it extended"
   done
 
   pass "fm-promote: PR-producing promotions carry the same PR-description contract as a ship brief"
+}
+
+# The meta rewrite lands before the brief is touched, so an unreachable or
+# unwritable brief must never abort the run: the promotion is already durable,
+# and swallowing the confirmation would leave the supervisor unsure whether it
+# took. Both paths warn, keep exit 0, and stop telling the worker to re-read a
+# brief it cannot use.
+test_promote_tolerates_an_unusable_brief() {
+  local home meta brief out probe
+  home="$TMP_ROOT/promote-nobrief/home"
+  mkdir -p "$home/state" "$home/data"
+
+  meta="$home/state/promote-nb.meta"
+  brief="$home/data/promote-nb/brief.md"
+  printf 'window=fm-promote-nb\nkind=scout\nworktree=/tmp/wt\n' > "$meta"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$PROMOTE" promote-nb --mode no-mistakes --yolo off 2>&1)
+  expect_code 0 "$?" "a promotion with no brief should still succeed"
+  assert_contains "$out" "no brief at $brief" "promotion did not report the unreachable brief"
+  assert_contains "$out" "$ROOT/docs/pr-visual-format.md" \
+    "the missing-brief warning did not name the visual-format doc to restate from"
+  assert_not_contains "$out" "re-read your brief" \
+    "the ship-instruction template still cites a brief that does not exist"
+  assert_grep 'kind=ship' "$meta" "promotion did not record the ship contract"
+
+  probe="$TMP_ROOT/promote-nobrief/readonly-probe"
+  : > "$probe"
+  chmod 444 "$probe"
+  if printf 'x' 2>/dev/null >> "$probe"; then
+    pass "fm-promote: an unreachable brief warns without aborting the recorded promotion (append-failure case skipped: writes bypass file permissions here)"
+    return 0
+  fi
+
+  meta="$home/state/promote-ro.meta"
+  brief="$home/data/promote-ro/brief.md"
+  mkdir -p "$home/data/promote-ro"
+  printf 'window=fm-promote-ro\nkind=scout\nworktree=/tmp/wt\n' > "$meta"
+  printf 'You are a crewmate.\n\n# Definition of done\nWrite your findings.\n' > "$brief"
+  chmod 444 "$brief"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$PROMOTE" promote-ro --mode direct-PR --yolo off 2>&1)
+  expect_code 0 "$?" "a promotion whose brief cannot be appended to should still succeed"
+  assert_contains "$out" "could not append the PR-description contract" \
+    "promotion did not report the failed append"
+  assert_contains "$out" "promoted promote-ro to ship" \
+    "a failed append swallowed the promotion confirmation"
+  assert_grep 'mode=direct-PR' "$meta" "promotion did not record the decided delivery mode"
+  chmod 644 "$brief"
+
+  pass "fm-promote: an unusable brief warns without aborting the already-recorded promotion"
 }
 
 # The registry parser survives for the mechanical consumers only. It accepts the
@@ -329,5 +381,6 @@ test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
 test_promote_carries_the_pr_description_contract
+test_promote_tolerates_an_unusable_brief
 test_project_mode_maps_the_conditional_policy
 echo "# all fm-task-delivery tests passed"

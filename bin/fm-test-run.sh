@@ -897,6 +897,12 @@ families_for_changed_path() {
     bin/fm-gate-refuse*|bin/fm-lock*|bin/fm-quota-axi-lib.sh)
       printf '%s\n' session-bootstrap
       ;;
+    bin/fm-pr-contract-lib.sh)
+      # Must precede the bin/fm-pr-* glob below: this file owns the generated
+      # ship-brief PR-description contract, which the pure-contract-unit suites
+      # assert, and touches none of the PR-forge merge machinery.
+      printf '%s\n' pure-contract-unit
+      ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*)
       printf '%s\n' pr-forge

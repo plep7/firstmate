@@ -95,24 +95,32 @@ mv "$TMP" "$META"
 # fresh ship brief is scaffolded with. Appending it to the brief keeps the
 # obligation durable and structural; the contract is an H2, so it nests under
 # the brief's final `# Definition of done` section. Idempotent by section
-# heading, and a missing brief is reported loudly rather than skipped silently.
+# heading.
+# The meta rewrite above has already landed, so no failure here may abort the
+# run: an unreachable or unwritable brief is reported loudly and the supervisor
+# is told to restate the contract inline, while the promotion still confirms
+# itself. The "next:" template points the worker back at its brief only when a
+# brief is actually there to re-read.
 BRIEF="$DATA/$ID/brief.md"
 CONTRACT_NOTE=
+BRIEF_CLAUSE=
+if [ -f "$BRIEF" ]; then
+  BRIEF_CLAUSE="re-read your brief at $BRIEF; "
+fi
 case "$MODE" in
   no-mistakes|direct-PR)
-    if [ -f "$BRIEF" ]; then
-      if grep -qx '## PR-description contract' "$BRIEF"; then
-        CONTRACT_NOTE=" (brief already carries the PR-description contract)"
-      else
-        printf '\n%s\n' "$(fm_pr_description_contract "$FM_ROOT" "$FM_HOME")" >> "$BRIEF"
-        CONTRACT_NOTE=" (PR-description contract appended to $BRIEF)"
-      fi
-    else
+    if [ ! -f "$BRIEF" ]; then
       echo "warning: no brief at $BRIEF; restate the PR-description contract from $(fm_pr_visual_format_doc "$FM_ROOT" "$FM_HOME") in the ship instructions" >&2
+    elif grep -qx '## PR-description contract' "$BRIEF"; then
+      CONTRACT_NOTE=" (brief already carries the PR-description contract)"
+    elif printf '\n%s\n' "$(fm_pr_description_contract "$FM_ROOT" "$FM_HOME")" 2>/dev/null >> "$BRIEF"; then
+      CONTRACT_NOTE=" (PR-description contract appended to $BRIEF)"
+    else
+      echo "warning: could not append the PR-description contract to $BRIEF; restate it from $(fm_pr_visual_format_doc "$FM_ROOT" "$FM_HOME") in the ship instructions" >&2
     fi
     ;;
 esac
 
 HOME_Q=$(printf '%q' "$FM_HOME")
 echo "promoted $ID to ship mode=$MODE yolo=$YOLO (teardown protection restored)$CONTRACT_NOTE"
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions for mode=$MODE: re-read your brief at $BRIEF; review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions for mode=$MODE: ${BRIEF_CLAUSE}review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"

@@ -669,14 +669,28 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
 
+# Line number of the first fixed-string match, or empty when absent.
+brief_line_of() {  # <needle> <file>
+  grep -nF -- "$1" "$2" | head -1 | cut -d: -f1
+}
+
+# The heading that owns the line at <line>: the nearest preceding `# ` H1.
+brief_enclosing_h1() {  # <line> <file>
+  awk -v limit="$1" '/^# / && NR < limit { last = $0 } END { print last }' "$2"
+}
+
 # The captain's PR-description standard (purpose-first line, terse Changes
 # bullets, type-appropriate visual evidence, one-line limitations, one-line
 # test evidence, banned diaries/archaeology/names/em-dashes/ticket citations)
 # must be structurally generated for every PR-producing mode rather than
 # depending on a supervisor remembering to say it. local-only ships no PR and
 # must not carry the contract at all.
+# The block is an H2 so `# Definition of done` stays one section: an H1 here
+# would end that section and orphan the terminal `done:` gate the brief's status
+# protocol points at. The contract must also precede that gate, so a worker
+# executing the DOD in order cannot report done before applying it.
 test_pr_description_contract() {
-  local home id brief
+  local home id mode brief contract_line gate_line
   home="$TMP_ROOT/pr-description-contract-home"
   mkdir -p "$home/data"
 
@@ -687,10 +701,12 @@ test_pr_description_contract() {
       "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "$mode: brief was not scaffolded"
-    assert_grep "# PR-DESCRIPTION CONTRACT" "$brief" \
+    assert_grep "## PR-description contract" "$brief" \
       "$mode: brief missing the PR-description contract section"
-    assert_grep "$ROOT/config/pr-visual-format.md" "$brief" \
-      "$mode: contract must reference the visual-format doc by absolute path"
+    assert_no_grep "# PR-DESCRIPTION CONTRACT" "$brief" \
+      "$mode: contract must nest under Definition of done, not open a new H1 section"
+    assert_grep "$ROOT/docs/pr-visual-format.md" "$brief" \
+      "$mode: contract must reference the tracked visual-format doc by absolute path"
     assert_grep "Purpose-first line naming this change's role" "$brief" \
       "$mode: contract lost the purpose-first requirement"
     assert_grep "Terse reviewer-facing Changes bullets" "$brief" \
@@ -710,8 +726,22 @@ test_pr_description_contract() {
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticked TODO example must stay literal
     assert_grep 'explicit TODO marker pointing at tracked future work, formulated exactly as `TODO(ADC-123)`' "$brief" \
       "$mode: contract lost the TODO(ADC-123) exception to the citation ban"
-    assert_grep "Verify the PR title convention and this body structure together in the same pre-ready check, and re-verify both after every subsequent push or pipeline round." "$brief" \
-      "$mode: contract lost the re-verify-after-every-round requirement"
+    assert_grep "re-verify both after every subsequent push or pipeline round up to your own stop point" "$brief" \
+      "$mode: contract lost the re-verify requirement bounded by the worker's stop point"
+    assert_grep "is firstmate's merge-time gate, not yours: do not stay resident waiting for one." "$brief" \
+      "$mode: contract must hand post-stop-point regeneration to firstmate"
+
+    contract_line=$(brief_line_of "## PR-description contract" "$brief")
+    [ "$(brief_enclosing_h1 "$contract_line" "$brief")" = "# Definition of done" ] || \
+      fail "$mode: contract must sit inside the Definition of done section"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticked done: gates must stay literal
+    case "$mode" in
+      no-mistakes) gate_line=$(brief_line_of 'append `done: PR {url} checks green` and stop' "$brief") ;;
+      *)           gate_line=$(brief_line_of 'then append `done: PR {url}` to the status file and stop' "$brief") ;;
+    esac
+    [ -n "$gate_line" ] || fail "$mode: brief lost its terminal done gate"
+    [ "$contract_line" -lt "$gate_line" ] || \
+      fail "$mode: contract must precede the terminal done gate, not follow it"
   done
 
   id="brief-prcontract-lo"
@@ -719,10 +749,53 @@ test_pr_description_contract() {
     "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode local-only >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "local-only: brief was not scaffolded"
-  assert_no_grep "PR-DESCRIPTION CONTRACT" "$brief" \
+  assert_no_grep "PR-description contract" "$brief" \
     "local-only brief must not carry the PR-description contract (no PR is produced)"
 
   pass "fm-brief.sh: PR-description contract is generated for no-mistakes/direct-PR and absent from local-only"
+}
+
+# The contract must name exactly one concrete, reachable absolute path. The
+# tracked docs/ copy is the default so any checkout resolves it; a
+# captain-private config copy wins when it exists, under either the home default
+# or FM_CONFIG_OVERRIDE.
+test_pr_visual_format_doc_resolution() {
+  local home id brief override
+  home="$TMP_ROOT/pr-visual-doc-home"
+  mkdir -p "$home/data"
+
+  id="brief-prdoc-tracked"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$ROOT/docs/pr-visual-format.md" \
+    "the tracked visual-format default must ship with the checkout"
+  assert_grep "$ROOT/docs/pr-visual-format.md" "$brief" \
+    "with no local override the contract must cite the tracked docs/ default"
+
+  override="$home/config/pr-visual-format.md"
+  mkdir -p "$home/config"
+  : > "$override"
+  id="brief-prdoc-override"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "$override" "$brief" \
+    "a local config/pr-visual-format.md must win over the tracked default"
+  assert_no_grep "$ROOT/docs/pr-visual-format.md" "$brief" \
+    "the contract must name exactly one doc path, not both"
+
+  override="$TMP_ROOT/pr-visual-doc-cfg/pr-visual-format.md"
+  mkdir -p "$TMP_ROOT/pr-visual-doc-cfg"
+  : > "$override"
+  id="brief-prdoc-cfgoverride"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_CONFIG_OVERRIDE="$TMP_ROOT/pr-visual-doc-cfg" \
+    "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "$override" "$brief" \
+    "FM_CONFIG_OVERRIDE must select the visual-format doc like every other config lookup"
+
+  pass "fm-brief.sh: visual-format doc resolves to the tracked default or a local override"
 }
 
 test_scout_and_secondmate_load_decision_hold_policy() {
@@ -783,5 +856,6 @@ test_secondmate_marked_request_reporting_contract
 test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_pr_description_contract
+test_pr_visual_format_doc_resolution
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold

@@ -54,10 +54,10 @@
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
 # over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
 # self-governance section when a touched project AGENTS.md lacks it.
-# no-mistakes and direct-PR DODs also carry a generated PR-DESCRIPTION CONTRACT
-# section (the captain's PR-description standard, pointing at
-# config/pr-visual-format.md by absolute path) so it is enforced on every
-# PR-producing ship task without depending on firstmate to restate it;
+# no-mistakes and direct-PR DODs also carry the generated PR-description
+# contract owned by bin/fm-pr-contract-lib.sh (the captain's PR-description
+# standard, naming the visual-format doc by absolute path) so it is enforced on
+# every PR-producing ship task without depending on firstmate to restate it;
 # local-only produces no PR and carries no such section.
 # Refuses to overwrite an existing brief.
 set -eu
@@ -80,6 +80,8 @@ esac
 . "$SCRIPT_DIR/fm-marker-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-pr-contract-lib.sh
+. "$SCRIPT_DIR/fm-pr-contract-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 
 resolve_directory_input() {
@@ -358,21 +360,11 @@ fi
 # PR-description contract: structurally enforces the captain's PR-description
 # standard for every PR-producing mode (no-mistakes, direct-PR) so it survives
 # without a supervisor remembering to say it. local-only produces no PR and is
-# unaffected. The format doc is referenced by absolute path because a worker
-# operates from a project worktree and cannot see a relative firstmate path.
-IFS= read -r -d '' PR_CONTRACT <<EOF || true
-# PR-DESCRIPTION CONTRACT
-Before reporting any PR ready, and again after ANY pipeline round or tool regenerates the body, rewrite the PR description to this structure (full detail and per-type evidence recipes: \`$FM_ROOT/config/pr-visual-format.md\`):
-- Purpose-first line naming this change's role (epic/incident context first when the change belongs to one).
-- Terse reviewer-facing Changes bullets, not an essay.
-- Type-appropriate visual evidence per the format doc: backend = mermaid diagram, bug fix = labeled Before/After, frontend = screenshots.
-- One-line known limitations.
-- One-line test evidence.
-- Delete any machine-generated Intent/Risk sections.
-BANNED, verbatim: first-person implementation diaries, fix-round archaeology, restated finding histories, individual teammate names, em-dashes, and ticket/Jira-key citations anywhere in committed content, documentation prose and code comments alike - the key lives in the PR title only. Comments must be terse and self-contained, with every fact a reader needs in the comment itself rather than leaning on a ticket for context. The one exception to the citation ban is an explicit TODO marker pointing at tracked future work, formulated exactly as \`TODO(ADC-123)\`.
-Verify the PR title convention and this body structure together in the same pre-ready check, and re-verify both after every subsequent push or pipeline round.
-EOF
-PR_CONTRACT=${PR_CONTRACT%$'\n'}
+# unaffected. bin/fm-pr-contract-lib.sh owns both the wording and the
+# absolute-path resolution of the visual-format doc; it is emitted as an H2 so
+# it nests inside this DOD instead of ending the section above the terminal
+# `done:` gate.
+PR_CONTRACT=$(fm_pr_description_contract "$FM_ROOT" "$FM_HOME")
 
 case "$MODE" in
   direct-PR)
@@ -383,10 +375,11 @@ case "$MODE" in
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 
 $PR_CONTRACT
+
+When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 EOF
     ;;
   local-only)

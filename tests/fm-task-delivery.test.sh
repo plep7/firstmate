@@ -238,6 +238,56 @@ test_promote_requires_and_records_the_delivery_contract() {
   pass "fm-promote: promotion requires the delivery contract and records it exactly once"
 }
 
+# A promoted scout raises its PR through the same standard a scaffolded ship task
+# does, so promotion into a PR-producing mode appends the generated
+# PR-description contract to the task's brief instead of leaving it to whatever
+# the supervisor happens to type into the free-text ship instructions.
+# local-only raises no PR and must stay untouched.
+test_promote_carries_the_pr_description_contract() {
+  local home meta brief out doc id mode
+  home="$TMP_ROOT/promote-contract/home"
+  doc="$ROOT/docs/pr-visual-format.md"
+
+  for id_mode in "promote-c-nm:no-mistakes" "promote-c-dp:direct-PR" "promote-c-lo:local-only"; do
+    id=${id_mode%%:*}
+    mode=${id_mode##*:}
+    meta="$home/state/$id.meta"
+    brief="$home/data/$id/brief.md"
+    mkdir -p "$home/state" "$home/data/$id"
+    printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+    printf 'You are a crewmate.\n\n# Definition of done\nWrite your findings.\n' > "$brief"
+
+    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_DATA_OVERRIDE="$home/data" "$PROMOTE" "$id" --mode "$mode" --yolo off 2>&1)
+    expect_code 0 "$?" "$mode: promotion should succeed"
+
+    if [ "$mode" = local-only ]; then
+      assert_no_grep "PR-description contract" "$brief" \
+        "local-only promotion must not add a PR-description contract (no PR is produced)"
+      assert_not_contains "$out" "PR-description contract" \
+        "local-only promotion advertised a contract it does not carry"
+      continue
+    fi
+
+    assert_grep "## PR-description contract" "$brief" \
+      "$mode: promotion did not append the PR-description contract to the brief"
+    assert_grep "$doc" "$brief" \
+      "$mode: appended contract did not name the visual-format doc by absolute path"
+    assert_contains "$out" "PR-description contract appended" \
+      "$mode: promotion did not report that it extended the brief"
+
+    printf 'kind=scout\n' >> "$meta"
+    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_DATA_OVERRIDE="$home/data" "$PROMOTE" "$id" --mode "$mode" --yolo off 2>&1)
+    [ "$(grep -c '^## PR-description contract$' "$brief")" = 1 ] || \
+      fail "$mode: re-promotion duplicated the PR-description contract"
+    assert_contains "$out" "already carries the PR-description contract" \
+      "$mode: re-promotion did not report the contract as already present"
+  done
+
+  pass "fm-promote: PR-producing promotions carry the same PR-description contract as a ship brief"
+}
+
 # The registry parser survives for the mechanical consumers only. It accepts the
 # conditional policy, maps it to its most rigorous leg for them, and exposes the
 # raw annotation for the one caller that must tell a policy from a flat mode.
@@ -278,5 +328,6 @@ test_spawn_refuses_a_brief_mode_mismatch
 test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
+test_promote_carries_the_pr_description_contract
 test_project_mode_maps_the_conditional_policy
 echo "# all fm-task-delivery tests passed"

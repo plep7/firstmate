@@ -269,6 +269,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/pr-visual-format.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/remote-secondmates.md",
       "audience": "operator-current"
     },

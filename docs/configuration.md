@@ -134,6 +134,13 @@ It does not set `commands.test` to a complete `tests/*.test.sh` walk.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the firstmate-specific local test policy and entry points.
 Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](fm-test-portable-shards.md); [herdr-backend.md](herdr-backend.md#destructive-lab-safety) owns the real-Herdr lane's isolation boundary, and [runtime-backends.md](verification/runtime-backends.md#herdr) owns active evidence.
 
+## PR description standard (config/pr-visual-format.md)
+
+Every PR-producing ship brief, including a scout brief that `bin/fm-promote.sh` moves into `no-mistakes` or `direct-PR`, carries a generated PR-description contract that cites one absolute path to the visual-format doc, resolved when that text is written.
+The tracked [`pr-visual-format.md`](pr-visual-format.md) is that doc and owns the standard itself; an optional local, gitignored `config/pr-visual-format.md` under the effective config directory replaces it wholly for this home when it exists.
+The override is home-local and absent from the inherited-local-material allowlist owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), so a secondmate home cites its own override or the tracked default.
+`bin/fm-pr-contract-lib.sh`'s header owns the contract text and the resolution order.
+
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
 Domain-local preferences for one captain's fleet live locally in each home's `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.

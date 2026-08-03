@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Single owner of the mode-shaped ship contract a crewmate is held to: the extra
 # Setup steps, Rule 1, and the whole `# Definition of done` section, generated
-# per delivery mode (no-mistakes, direct-PR, local-only).
+# per delivery mode (no-mistakes, direct-PR, local-only). It also owns the scout
+# Setup framing that a promotion replaces, so the scaffolded wording and the
+# wording the rewrite matches on stay one string.
 #
 # Two entry points share this text so each mode's contract has exactly one home:
 #   bin/fm-brief.sh    scaffolds a fresh ship brief around these blocks
@@ -108,6 +110,17 @@ After /no-mistakes reports CI green (the CI-ready return point - do not wait for
 EOF
       ;;
   esac
+}
+
+# Print the scout Setup framing: the report-deliverable statement a scout brief
+# is scaffolded with and the exact block a promotion replaces. Both sides read it
+# from here so the scaffold's wording and the rewrite's match cannot drift apart.
+fm_scout_setup_framing() {
+  cat <<'EOF'
+This is a SCOUT task: the deliverable is a written report, not a PR.
+The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
+The report is the only thing that survives, so anything worth keeping must be in it.
+EOF
 }
 
 # Print the Setup framing that replaces a promoted scout's report-deliverable

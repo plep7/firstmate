@@ -113,23 +113,36 @@ mv "$TMP" "$META"
 # it.
 # The blocks are multi-line, which rules out passing them through `awk -v`: BSD
 # awk refuses a newline inside a -v value, so the rewrite is done in the shell.
+# The Setup framing is matched against bin/fm-ship-contract-lib.sh's copy rather
+# than a literal, so the scaffold and this rewrite cannot drift. A brief written
+# by an older release still will not match, and that case is reported rather than
+# passed off as a full reconciliation: RECONCILE_SETUP_APPLIED tells the caller
+# whether the promoted brief actually gained its branch-creation step.
+RECONCILE_SETUP_APPLIED=0
 reconcile_brief_to_ship_mode() {  # <brief> <mode> <task-id>
   local brief=$1 mode=$2 id=$3 tmp setup rule1 rule2 dod line last=
+  local scout_framing scout_lead
   local in_rules=0 rule1_done=0 rule2_done=0 dod_done=0
+  RECONCILE_SETUP_APPLIED=0
   tmp="$brief.promote.tmp"
   [ -w "$brief" ] || return 1
   setup=$(fm_promoted_setup_framing "$mode" "$id")
   rule1=$(fm_ship_rule1 "$mode" "$id")
   rule2=$(fm_ship_rule2)
   dod=$(fm_ship_dod "$mode" "$id" "$FM_ROOT" "$FM_HOME")
+  scout_framing=$(fm_scout_setup_framing)
+  scout_lead=${scout_framing%%$'\n'*}
   {
     while IFS= read -r line || [ -n "$line" ]; do
+      if [ -n "$line" ]; then
+        if [ "$line" = "$scout_lead" ]; then
+          printf '%s\n' "$setup"; last=$setup; RECONCILE_SETUP_APPLIED=1; continue
+        fi
+        case $'\n'"$scout_framing"$'\n' in
+          *$'\n'"$line"$'\n'*) continue ;;
+        esac
+      fi
       case "$line" in
-        'This is a SCOUT task: the deliverable is a written report, not a PR.')
-          printf '%s\n' "$setup"; last=$setup; continue ;;
-        'The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.'|\
-        'The report is the only thing that survives, so anything worth keeping must be in it.')
-          continue ;;
         '# Rules') in_rules=1 ;;
         '# Definition of done')
           printf '%s\n' "$dod"; dod_done=1; break ;;
@@ -157,6 +170,20 @@ reconcile_brief_to_ship_mode() {  # <brief> <mode> <task-id>
   mv "$tmp" "$brief" 2>/dev/null || { rm -f "$tmp"; return 1; }
 }
 
+# Report whether this brief already ends in the ship contract this promotion
+# would write. Only the last `# Definition of done` counts, and only when the
+# delivery line opens it and the contract heading sits inside it: reconciliation
+# always terminates a brief that way, so free-text quoting the same lines in the
+# `# Task` section a supervisor writes cannot pass for a reconciled brief.
+brief_states_ship_contract() {  # <brief> <mode>
+  awk -v want="Delivery contract: mode=$2" -v heading="$FM_PR_CONTRACT_HEADING" '
+    $0 == "# Definition of done" { dod = NR; delivery = 0; contract = 0; next }
+    dod && NR == dod + 1 { delivery = ($0 == want) }
+    dod && $0 == heading { contract = 1 }
+    END { exit((dod && delivery && contract) ? 0 : 1) }
+  ' "$1"
+}
+
 # The meta rewrite above has already landed, so no failure here may abort the
 # run: an unreachable or unwritable brief is reported loudly on both stderr and
 # the confirmation line, so a caller reading only stdout still learns the brief
@@ -175,10 +202,15 @@ case "$MODE" in
     if [ ! -f "$BRIEF" ]; then
       CONTRACT_NOTE="$NO_CONTRACT_NOTE"
       echo "warning: no brief at $BRIEF; restate the PR-description contract from $(fm_pr_visual_format_doc "$FM_ROOT" "$FM_HOME") in the ship instructions" >&2
-    elif grep -qxF "$FM_PR_CONTRACT_HEADING" "$BRIEF" && grep -qxF "Delivery contract: mode=$MODE" "$BRIEF"; then
+    elif brief_states_ship_contract "$BRIEF" "$MODE"; then
       CONTRACT_NOTE=" (brief already carries the PR-description contract and the mode=$MODE ship contract)"
     elif reconcile_brief_to_ship_mode "$BRIEF" "$MODE" "$ID"; then
-      CONTRACT_NOTE=" (brief reconciled to the mode=$MODE ship contract; PR-description contract appended to $BRIEF)"
+      if [ "$RECONCILE_SETUP_APPLIED" -eq 1 ]; then
+        CONTRACT_NOTE=" (brief reconciled to the mode=$MODE ship contract; PR-description contract appended to $BRIEF)"
+      else
+        CONTRACT_NOTE=" (PR-description contract appended to $BRIEF with the mode=$MODE definition of done, but its Setup section matched no scout framing this release knows and still states no branch-creation step)"
+        echo "warning: $BRIEF carries no scout setup framing this release recognizes, so its Setup section was left as written and the reconciled brief names no branch step; restate the ship setup in the ship instructions (inventory the scratch state, reset to a clean default-branch base, create branch fm/$ID) and correct the Setup section by hand" >&2
+      fi
     else
       CONTRACT_NOTE="$NO_CONTRACT_NOTE"
       echo "warning: could not append the PR-description contract to $BRIEF; restate it from $(fm_pr_visual_format_doc "$FM_ROOT" "$FM_HOME") in the ship instructions, along with the mode=$MODE definition of done - the brief still states a scout contract" >&2

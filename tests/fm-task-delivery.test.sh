@@ -375,6 +375,87 @@ test_promote_reconciles_the_scout_brief_to_its_ship_mode() {
   pass "fm-promote: a PR-producing promotion rewrites the whole scout brief onto its ship contract"
 }
 
+# Scaffold a real scout brief and its meta, then rewrite the brief body with one
+# bash substitution. Briefs are durable files, so the cases below stand in for a
+# brief written before the current scaffold and for one whose free-text task
+# section quotes the generated contract.
+make_scout_task() {  # <home> <id> <needle> <replacement>
+  local home=$1 id=$2 needle=$3 replacement=$4 brief content
+  brief="$home/data/$id/brief.md"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$home/state/$id.meta"
+  content=$(cat "$brief")
+  printf '%s\n' "${content/"$needle"/$replacement}" > "$brief"
+}
+
+# The Setup framing is the only source of the promoted brief's branch-creation
+# step, and it is replaced by matching the scaffold's own wording. A brief from an
+# older release does not match, and reporting that as a full reconciliation would
+# hand the worker a ship Definition of done with no branch to commit on. The
+# rewrite still lands the contract, but says on both channels that the Setup
+# section needs restating.
+test_promote_reports_unmatched_scout_setup_framing() {
+  local home brief out id="promote-oldfmt"
+  home="$TMP_ROOT/promote-oldfmt/home"
+  mkdir -p "$home/state" "$home/data"
+  brief="$home/data/$id/brief.md"
+  make_scout_task "$home" "$id" \
+    'This is a SCOUT task: the deliverable is a written report, not a PR.' \
+    'This is a SCOUT task: your deliverable is a written report and never a PR.'
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1)
+  expect_code 0 "$?" "a promotion whose brief has unknown setup framing should still succeed"
+  assert_contains "$out" "carries no scout setup framing this release recognizes" \
+    "promotion did not warn that the Setup section was left as written"
+  assert_contains "$out" "create branch fm/$id" \
+    "the warning did not tell the supervisor to restate the branch step"
+  assert_contains "$out" "states no branch-creation step" \
+    "the stdout confirmation claimed a full reconciliation it did not perform"
+  assert_grep "## PR-description contract" "$brief" \
+    "the contract must still land even when the Setup framing is unrecognized"
+  assert_no_grep "git checkout -b fm/$id" "$brief" \
+    "fixture no longer reproduces the missing branch step this case is about"
+
+  pass "fm-promote: an unrecognized scout setup framing is reported, not passed off as reconciled"
+}
+
+# The already-reconciled guard must read the contract the rewrite writes, not any
+# line that happens to appear in the brief. A scout task whose own description
+# quotes the contract heading and the delivery line is ordinary fleet-tooling
+# work, and skipping reconciliation for it would leave the report.md gate intact
+# on a task that now owes a PR.
+test_promote_guard_ignores_quoted_contract_in_task_text() {
+  local home brief out id="promote-quoted" task
+  home="$TMP_ROOT/promote-quoted/home"
+  mkdir -p "$home/state" "$home/data"
+  brief="$home/data/$id/brief.md"
+  task=$'Audit how briefs carry the `## PR-description contract` block.\n## PR-description contract\nDelivery contract: mode=no-mistakes'
+  make_scout_task "$home" "$id" '{TASK}' "$task"
+  assert_grep "## PR-description contract" "$brief" "fixture did not quote the contract heading"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1)
+  expect_code 0 "$?" "$id: promotion should succeed"
+  assert_not_contains "$out" "already carries the PR-description contract" \
+    "quoted task text was mistaken for an already-reconciled brief"
+  assert_no_grep "$home/data/$id/report.md" "$brief" \
+    "the brief kept its scout report gate because the guard short-circuited"
+  assert_grep "promoted from scout to a SHIP task" "$brief" \
+    "the brief was not reconciled to its ship contract"
+  assert_grep "Delivery contract: mode=no-mistakes" "$brief" \
+    "the brief did not record the decided delivery contract"
+
+  printf 'kind=scout\n' >> "$home/state/$id.meta"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1)
+  assert_contains "$out" "already carries the PR-description contract" \
+    "a genuinely reconciled brief was not recognized on re-promotion"
+
+  pass "fm-promote: the already-reconciled guard reads the generated contract, not quoted task text"
+}
+
 # The meta rewrite lands before the brief is touched, so an unreachable or
 # unwritable brief must never abort the run: the promotion is already durable,
 # and swallowing the confirmation would leave the supervisor unsure whether it
@@ -467,6 +548,8 @@ test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
 test_promote_carries_the_pr_description_contract
 test_promote_reconciles_the_scout_brief_to_its_ship_mode
+test_promote_reports_unmatched_scout_setup_framing
+test_promote_guard_ignores_quoted_contract_in_task_text
 test_promote_tolerates_an_unusable_brief
 test_project_mode_maps_the_conditional_policy
 echo "# all fm-task-delivery tests passed"

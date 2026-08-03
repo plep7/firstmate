@@ -12,17 +12,24 @@
 # read the scout's report (AGENTS.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never looks it up.
 # no-mistakes-prod-only is a registry policy rather than a task mode and is refused.
-# Promotion into a PR-producing mode (no-mistakes, direct-PR) appends the same
-# generated PR-description contract a fresh ship brief carries to this task's
-# brief, so a promoted scout's PR is held to the captain's standard without the
-# supervisor pasting it into the free-text ship instructions.
-# bin/fm-pr-contract-lib.sh owns that text; local-only raises no PR and is unaffected.
+# Promotion into a PR-producing mode (no-mistakes, direct-PR) reconciles this
+# task's brief to its new mode: the scout framing (report deliverable, throwaway
+# laboratory), Rule 1's no-push/no-PR authority, and the report.md Definition of
+# done are replaced by the same blocks a freshly scaffolded ship brief carries,
+# including the generated PR-description contract ahead of the mode's terminal
+# `done:` gate. A promoted brief therefore reads as one ship contract rather than
+# a scout charter with ship text stapled onto the end, and the captain's
+# PR-description standard holds without the supervisor pasting it into the
+# free-text ship instructions.
+# bin/fm-ship-contract-lib.sh owns the mode-shaped contract and
+# bin/fm-pr-contract-lib.sh the PR-description block; local-only raises no PR and
+# a local-only promotion leaves the brief untouched.
 # Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=bin/fm-pr-contract-lib.sh
-. "$SCRIPT_DIR/fm-pr-contract-lib.sh"
+# shellcheck source=bin/fm-ship-contract-lib.sh
+. "$SCRIPT_DIR/fm-ship-contract-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -91,32 +98,90 @@ grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
 } >> "$TMP"
 mv "$TMP" "$META"
 
-# A promoted PR-producing task must carry the same PR-description contract a
-# fresh ship brief is scaffolded with. Appending it to the brief keeps the
-# obligation durable and structural; the contract is an H2, so it nests under
-# the brief's final `# Definition of done` section. Idempotent by section
-# heading.
+# Rewrite the brief this task already has onto the ship contract its new mode
+# defines. The scout framing states the deliverable is a report, Rule 1 forbids
+# pushing and opening a PR at all, and the Definition of done terminates on
+# writing report.md; left in place, a worker could satisfy every one of them and
+# stop without producing the PR this promotion just committed it to. The
+# replacement blocks come from bin/fm-ship-contract-lib.sh, so a promoted brief
+# and a scaffolded one state the same contract, with the PR-description block
+# ordered ahead of the terminal `done:` gate exactly as it is scaffolded.
+#
+# Rewriting is idempotent by construction: the whole Definition of done is
+# regenerated and the scout lines it replaces are matched exactly, so a second
+# promotion reproduces the same file rather than layering a second contract onto
+# it.
+# The blocks are multi-line, which rules out passing them through `awk -v`: BSD
+# awk refuses a newline inside a -v value, so the rewrite is done in the shell.
+reconcile_brief_to_ship_mode() {  # <brief> <mode> <task-id>
+  local brief=$1 mode=$2 id=$3 tmp setup rule1 rule2 dod line last=
+  local in_rules=0 rule1_done=0 rule2_done=0 dod_done=0
+  tmp="$brief.promote.tmp"
+  [ -w "$brief" ] || return 1
+  setup=$(fm_promoted_setup_framing "$mode" "$id")
+  rule1=$(fm_ship_rule1 "$mode" "$id")
+  rule2=$(fm_ship_rule2)
+  dod=$(fm_ship_dod "$mode" "$id" "$FM_ROOT" "$FM_HOME")
+  {
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        'This is a SCOUT task: the deliverable is a written report, not a PR.')
+          printf '%s\n' "$setup"; last=$setup; continue ;;
+        'The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.'|\
+        'The report is the only thing that survives, so anything worth keeping must be in it.')
+          continue ;;
+        '# Rules') in_rules=1 ;;
+        '# Definition of done')
+          printf '%s\n' "$dod"; dod_done=1; break ;;
+      esac
+      if [ "$in_rules" -eq 1 ]; then
+        case "$line" in
+          '1. '*)
+            if [ "$rule1_done" -eq 0 ]; then
+              printf '%s\n' "$rule1"; rule1_done=1; last=$rule1; continue
+            fi ;;
+          '2. '*)
+            if [ "$rule2_done" -eq 0 ]; then
+              printf '%s\n' "$rule2"; rule2_done=1; last=$rule2; continue
+            fi ;;
+        esac
+      fi
+      printf '%s\n' "$line"
+      last=$line
+    done < "$brief"
+    if [ "$dod_done" -eq 0 ]; then
+      [ -z "$last" ] || printf '\n'
+      printf '%s\n' "$dod"
+    fi
+  } 2>/dev/null > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$brief" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+
 # The meta rewrite above has already landed, so no failure here may abort the
-# run: an unreachable or unwritable brief is reported loudly and the supervisor
-# is told to restate the contract inline, while the promotion still confirms
-# itself. The "next:" template points the worker back at its brief only when a
-# brief is actually there to re-read.
+# run: an unreachable or unwritable brief is reported loudly on both stderr and
+# the confirmation line, so a caller reading only stdout still learns the brief
+# was not reconciled and the supervisor must restate the contract inline. The
+# "next:" template points the worker back at its brief only when a brief is
+# actually there to re-read.
 BRIEF="$DATA/$ID/brief.md"
 CONTRACT_NOTE=
 BRIEF_CLAUSE=
 if [ -f "$BRIEF" ]; then
   BRIEF_CLAUSE="re-read your brief at $BRIEF; "
 fi
+NO_CONTRACT_NOTE=" (PR-description contract NOT appended - restate it and the mode=$MODE ship contract inline)"
 case "$MODE" in
   no-mistakes|direct-PR)
     if [ ! -f "$BRIEF" ]; then
+      CONTRACT_NOTE="$NO_CONTRACT_NOTE"
       echo "warning: no brief at $BRIEF; restate the PR-description contract from $(fm_pr_visual_format_doc "$FM_ROOT" "$FM_HOME") in the ship instructions" >&2
-    elif grep -qx '## PR-description contract' "$BRIEF"; then
-      CONTRACT_NOTE=" (brief already carries the PR-description contract)"
-    elif printf '\n%s\n' "$(fm_pr_description_contract "$FM_ROOT" "$FM_HOME")" 2>/dev/null >> "$BRIEF"; then
-      CONTRACT_NOTE=" (PR-description contract appended to $BRIEF)"
+    elif grep -qxF "$FM_PR_CONTRACT_HEADING" "$BRIEF" && grep -qxF "Delivery contract: mode=$MODE" "$BRIEF"; then
+      CONTRACT_NOTE=" (brief already carries the PR-description contract and the mode=$MODE ship contract)"
+    elif reconcile_brief_to_ship_mode "$BRIEF" "$MODE" "$ID"; then
+      CONTRACT_NOTE=" (brief reconciled to the mode=$MODE ship contract; PR-description contract appended to $BRIEF)"
     else
-      echo "warning: could not append the PR-description contract to $BRIEF; restate it from $(fm_pr_visual_format_doc "$FM_ROOT" "$FM_HOME") in the ship instructions" >&2
+      CONTRACT_NOTE="$NO_CONTRACT_NOTE"
+      echo "warning: could not append the PR-description contract to $BRIEF; restate it from $(fm_pr_visual_format_doc "$FM_ROOT" "$FM_HOME") in the ship instructions, along with the mode=$MODE definition of done - the brief still states a scout contract" >&2
     fi
     ;;
 esac

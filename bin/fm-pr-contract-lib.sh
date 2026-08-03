@@ -4,10 +4,11 @@
 # contract so it is enforced structurally instead of depending on a supervisor
 # restating it.
 #
-# Two entry points share this text so the wording has exactly one home:
-#   bin/fm-brief.sh    splices it into the no-mistakes and direct-PR definitions
-#                      of done at scaffold time
-#   bin/fm-promote.sh  appends it to a scout's brief when promotion moves that
+# The block reaches a brief through bin/fm-ship-contract-lib.sh, which splices it
+# into the no-mistakes and direct-PR definitions of done. Both entry points get
+# it from there, so the wording has exactly one home:
+#   bin/fm-brief.sh    scaffolds a ship brief around that definition of done
+#   bin/fm-promote.sh  rewrites a scout's brief onto it when promotion moves that
 #                      task to a PR-producing mode
 # local-only produces no PR and never carries the block.
 #
@@ -22,6 +23,11 @@
 # override at ${FM_CONFIG_OVERRIDE:-<fm-home>/config}/pr-visual-format.md wins
 # when it exists on disk. Exactly one concrete path is written into the brief,
 # resolved at generation time.
+
+# The block's section heading is part of this file's public interface: callers
+# locate an already-generated block by it, so re-leveling or renaming the
+# section stays a one-file edit here.
+FM_PR_CONTRACT_HEADING='## PR-description contract'
 
 # Print the absolute path of the visual-format doc this home should cite.
 fm_pr_visual_format_doc() {  # <fm-root> <fm-home>
@@ -39,7 +45,7 @@ fm_pr_description_contract() {  # <fm-root> <fm-home>
   local doc
   doc=$(fm_pr_visual_format_doc "$1" "$2")
   cat <<EOF
-## PR-description contract
+$FM_PR_CONTRACT_HEADING
 Before reporting any PR ready, and again after ANY pipeline round or tool regenerates the body, rewrite the PR description to this structure (full detail and per-type evidence recipes: \`$doc\`):
 - Purpose-first line naming this change's role (epic/incident context first when the change belongs to one).
 - Terse reviewer-facing Changes bullets, not an essay.

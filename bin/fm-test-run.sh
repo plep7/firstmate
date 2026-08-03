@@ -897,10 +897,13 @@ families_for_changed_path() {
     bin/fm-gate-refuse*|bin/fm-lock*|bin/fm-quota-axi-lib.sh)
       printf '%s\n' session-bootstrap
       ;;
-    bin/fm-pr-contract-lib.sh)
-      # Must precede the bin/fm-pr-* glob below: this file owns the generated
-      # ship-brief PR-description contract, which the pure-contract-unit suites
-      # assert, and touches none of the PR-forge merge machinery.
+    bin/fm-pr-contract-lib.sh|bin/fm-ship-contract-lib.sh)
+      # fm-pr-contract-lib.sh must precede the bin/fm-pr-* glob below: it owns
+      # the generated ship-brief PR-description contract, which the
+      # pure-contract-unit suites assert, and touches none of the PR-forge merge
+      # machinery. fm-ship-contract-lib.sh owns the mode-shaped ship contract the
+      # same suites assert through both fm-brief.sh and fm-promote.sh, so it is
+      # named here rather than left to the bin/* reference scan.
       printf '%s\n' pure-contract-unit
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
@@ -946,7 +949,13 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       ;;
     .github/*|.tasks.toml|AGENTS.md|CLAUDE.md|CONTRIBUTING.md|\
-    docs/configuration.md|docs/supervision-protocols/*)
+    docs/configuration.md|docs/pr-visual-format.md|\
+    docs/documentation-audiences.json|docs/supervision-protocols/*)
+      # These docs are runtime dependencies rather than prose: the generated
+      # PR-description contract cites pr-visual-format.md by absolute path and
+      # the audience inventory is asserted directly, so renaming or deleting
+      # either must select the suites that check them instead of falling through
+      # to the no-op docs arm below.
       printf '%s\n' pure-contract-unit
       ;;
     tests/lib.sh|tests/*-helpers.sh)

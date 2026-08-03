@@ -290,6 +290,91 @@ test_promote_carries_the_pr_description_contract() {
   pass "fm-promote: PR-producing promotions carry the same PR-description contract as a ship brief"
 }
 
+# Line number of the first fixed-string match, or empty when absent.
+delivery_line_of() {  # <needle> <file>
+  grep -nF -- "$1" "$2" | head -1 | cut -d: -f1
+}
+
+# Promotion decides a delivery contract, so the brief the worker re-reads must
+# state that contract and nothing else. A real scout brief forbids pushing and
+# opening a PR outright, frames the deliverable as a written report in a
+# throwaway laboratory, and terminates on writing report.md; every one of those
+# survives a promotion that only appends, letting the worker satisfy its brief
+# and stop without ever raising the PR the promotion just committed it to.
+# The replacement blocks are the same ones bin/fm-brief.sh scaffolds, so the
+# PR-description contract lands inside the new Definition of done ahead of that
+# mode's terminal `done:` gate rather than after it.
+test_promote_reconciles_the_scout_brief_to_its_ship_mode() {
+  local home meta brief id mode contract_line gate_line
+  home="$TMP_ROOT/promote-reconcile/home"
+  mkdir -p "$home/state" "$home/data"
+
+  for id_mode in "promote-r-nm:no-mistakes" "promote-r-dp:direct-PR" "promote-r-lo:local-only"; do
+    id=${id_mode%%:*}
+    mode=${id_mode##*:}
+    meta="$home/state/$id.meta"
+    brief="$home/data/$id/brief.md"
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_DATA_OVERRIDE="$home/data" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+    assert_present "$brief" "$mode: the scout brief under test was not scaffolded"
+    assert_grep "This is a SCOUT task" "$brief" "$mode: fixture is not a scout brief"
+    printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_DATA_OVERRIDE="$home/data" "$PROMOTE" "$id" --mode "$mode" --yolo off >/dev/null 2>&1
+    expect_code 0 "$?" "$mode: promotion should succeed"
+
+    if [ "$mode" = local-only ]; then
+      assert_grep "This is a SCOUT task: the deliverable is a written report, not a PR." "$brief" \
+        "a local-only promotion raises no PR and must leave the brief untouched"
+      continue
+    fi
+
+    assert_no_grep "This is a SCOUT task: the deliverable is a written report, not a PR." "$brief" \
+      "$mode: promoted brief still tells the worker its deliverable is a report"
+    assert_no_grep "The report is the only thing that survives" "$brief" \
+      "$mode: promoted brief still frames the worktree as a scratch report laboratory"
+    assert_no_grep "1. Never push to any remote and never open a PR." "$brief" \
+      "$mode: promoted brief still forbids the push and the PR it now requires"
+    assert_no_grep "$home/data/$id/report.md" "$brief" \
+      "$mode: promoted brief still names report.md as the deliverable"
+    assert_no_grep "the only files you may write outside it are the report" "$brief" \
+      "$mode: promoted brief still grants the worker a report to write outside the worktree"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticked scout gate must stay literal
+    assert_no_grep 'append `done: {one-line conclusion}`' "$brief" \
+      "$mode: promoted brief still terminates on the scout report gate"
+
+    assert_grep "promoted from scout to a SHIP task" "$brief" \
+      "$mode: promoted brief did not state its new ship framing"
+    assert_grep "git checkout -b fm/$id" "$brief" \
+      "$mode: promoted brief did not tell the worker to create its branch"
+    assert_grep "Delivery contract: mode=$mode" "$brief" \
+      "$mode: promoted brief did not record the decided delivery contract"
+    assert_grep "1. Never push to the default branch" "$brief" \
+      "$mode: promoted brief did not take on this mode's push authority"
+    [ "$(grep -c '^# Definition of done$' "$brief")" = 1 ] || \
+      fail "$mode: promoted brief carries more than one Definition of done"
+
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticked setup step and done: gates must stay literal
+    if [ "$mode" = no-mistakes ]; then
+      assert_grep 'Run `no-mistakes doctor`' "$brief" \
+        "$mode: promoted brief lost the mode's extra setup step"
+      gate_line=$(delivery_line_of 'append `done: PR {url} checks green` and stop' "$brief")
+    else
+      assert_grep "Do NOT run /no-mistakes." "$brief" \
+        "$mode: promoted brief did not take on the direct-PR pipeline rule"
+      gate_line=$(delivery_line_of 'then append `done: PR {url}` to the status file and stop' "$brief")
+    fi
+    contract_line=$(delivery_line_of "## PR-description contract" "$brief")
+    [ -n "$gate_line" ] || fail "$mode: promoted brief lost its terminal done gate"
+    [ -n "$contract_line" ] || fail "$mode: promoted brief lost the PR-description contract"
+    [ "$contract_line" -lt "$gate_line" ] || \
+      fail "$mode: contract must precede the terminal done gate, not follow it"
+  done
+
+  pass "fm-promote: a PR-producing promotion rewrites the whole scout brief onto its ship contract"
+}
+
 # The meta rewrite lands before the brief is touched, so an unreachable or
 # unwritable brief must never abort the run: the promotion is already durable,
 # and swallowing the confirmation would leave the supervisor unsure whether it
@@ -381,6 +466,7 @@ test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
 test_promote_carries_the_pr_description_contract
+test_promote_reconciles_the_scout_brief_to_its_ship_mode
 test_promote_tolerates_an_unusable_brief
 test_project_mode_maps_the_conditional_policy
 echo "# all fm-task-delivery tests passed"

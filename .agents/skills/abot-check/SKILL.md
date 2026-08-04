@@ -23,7 +23,7 @@ A finding that warrants action is named for the captain's own decision, never ac
    It is the single bounded data source for this skill.
    Do not invent a second query, probe the API or database ad hoc, or read a stale report file instead.
    The script's own header and `--help` own its exact fields, env overrides, and output contract (`fm-abot-check.v1`).
-   It reaches the target over two independent channels - plain HTTP to the dashboard API, and SSH to the docker host for container health and read-only `psql` - and degrades each independently: an unreachable endpoint or command is recorded under `[sources] unreachable:` and its section's fields read `n/a`, never a crash or a silent gap.
+   It reaches the target over two independent channels - plain HTTP to the dashboard API, and SSH to the docker host for container health and read-only `psql` - and degrades each independently: a source that is unreachable, answers with an error, or reports itself switched off is recorded under `[sources] unreachable:` and its section's fields read `n/a`, never a crash and never a clean-looking zero.
 2. **Compose the chat digest from the fresh output.**
    The gather step already computed every count and every section's `needs_attention` verdict; your job is only to translate those labeled facts into captain-facing prose, per `AGENTS.md` section 9 - plain outcomes, no internal jargon, no raw field dumps.
    Every number keeps the scope label the script gave it (`realized_today` vs `realized_all_time`, `orphan_stuck_30d` vs today's trade audit, etc.) so a captain reading the chat can never mistake one window for another.
@@ -42,6 +42,7 @@ Render exactly six sections, in this order, every time - never omit one for bein
 
 Every section ends with an explicit needs-attention line, taken directly from that section's `needs_attention` value in the script output - state it plainly ("needs your attention: ..." or "nothing to flag here") rather than leaving the captain to infer it from the numbers.
 When a source was unreachable, say so plainly in that section ("couldn't reach abot's database for this" rather than silently omitting the fields) instead of pretending the section is simply empty or clean.
+A field reading `n/a` is always a gap to report, never a zero to reassure the captain with.
 
 ## Tone and content rules
 

@@ -10,13 +10,27 @@
 # here ever restarts, prunes, or mutates the target host; every command is a
 # GET, `docker ps`, or a read-only `psql` SELECT.
 #
+# A source counts as unreachable, never as a clean zero, when: the transport
+# fails, the HTTP status is not 2xx, the body is not JSON, a debug surface
+# answers `available:false` or a non-null `error`, or a local prerequisite for
+# reading it is absent (`missing:jq`, `missing:date-cutoff`). Every such label
+# also forces its section's `needs_attention` to true, so a gap is always
+# reported as a gap rather than rendering as a quiet section.
+#
 # Output contract: `fm-abot-check.v1`, plain `key: value` lines grouped under
 # `[section]` headers, plus repeated `<label>_line: ...` lines for per-row
 # detail (alerts, silent-drop trades). Every section ends with its own
 # `needs_attention: true|false`; `[verdict]` closes with the fleet-wide
-# `overall_needs_attention` and a `sections_needing_attention` list. This is
-# the single owner of that logic - SKILL.md renders captain-facing prose from
-# these facts and never recomputes a verdict of its own.
+# `overall_needs_attention` and a `sections_needing_attention` list built from
+# those same per-section values. This is the single owner of that logic -
+# SKILL.md renders captain-facing prose from these facts and never recomputes a
+# verdict of its own.
+#
+# Container health reads `docker ps -a`, so a stopped or never-started abot-
+# container stays visible instead of vanishing from the count. A container is
+# unhealthy when it is not in an `Up` state, or when it has a HEALTHCHECK
+# reporting anything other than healthy; a running container with no
+# HEALTHCHECK configured is counted separately and is not by itself a problem.
 #
 # Env overrides (all optional):
 #   FM_ABOT_HOST              docker/API host                  (default 192.168.1.215)
@@ -33,10 +47,20 @@
 #   fm-abot-check-snapshot.sh -h|--help  usage
 set -u
 
+fm_abot_usage() {  # the whole header block, however long it grows
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
 case "${1:-}" in
   -h|--help)
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    fm_abot_usage
     exit 0
+    ;;
+  '') ;;
+  *)
+    printf 'fm-abot-check-snapshot.sh: unknown argument: %s\n' "$1" >&2
+    fm_abot_usage >&2
+    exit 2
     ;;
 esac
 
@@ -52,16 +76,27 @@ BASELINE_DAYS=${FM_ABOT_BASELINE_DAYS:-7}
 UNREACHABLE=()
 
 have_jq=1
-command -v jq >/dev/null 2>&1 || have_jq=0
+command -v jq >/dev/null 2>&1 || { have_jq=0; UNREACHABLE+=("missing:jq"); }
 
-curl_get() {  # <path> -> body on stdout; returns 1 on any failure
-  local path=$1 body
-  body=$(curl -sS -m "$CURL_TIMEOUT" "http://$HOST:$API_PORT$path" 2>/dev/null)
+curl_get() {  # <path> -> body on stdout; returns 1 on transport, status, or parse failure
+  local path=$1 raw body code
+  raw=$(curl -sS -m "$CURL_TIMEOUT" -w '\n%{http_code}' \
+    "http://$HOST:$API_PORT$path" 2>/dev/null) || return 1
+  case "$raw" in *$'\n'*) ;; *) return 1 ;; esac
+  code=${raw##*$'\n'}
+  body=${raw%$'\n'*}
+  case "$code" in 2??) ;; *) return 1 ;; esac
   [ -n "$body" ] || return 1
   if [ "$have_jq" -eq 1 ] && ! printf '%s' "$body" | jq -e . >/dev/null 2>&1; then
     return 1
   fi
   printf '%s' "$body"
+}
+
+debug_off() {  # <json> -> 0 when the debug surface reported itself unavailable or errored
+  [ "$have_jq" -eq 1 ] || return 1
+  printf '%s' "$1" \
+    | jq -e '(.available == false) or ((.error // null) != null)' >/dev/null 2>&1
 }
 
 jqf() {  # <json> <filter> -> value, or "n/a" on any failure
@@ -93,19 +128,22 @@ echo
 
 # ---- version + container health --------------------------------------------
 version_json=$(curl_get /api/v1/version) || { UNREACHABLE+=("http:version"); version_json=''; }
-docker_ps=$(ssh_run "docker ps --filter 'name=abot-' --format '{{.Names}}\t{{.Status}}'")
+docker_ps=$(ssh_run "docker ps -a --filter 'name=abot-' --format '{{.Names}}\t{{.Status}}'")
 docker_ps_rc=$?
 [ "$docker_ps_rc" -eq 0 ] || UNREACHABLE+=("ssh:docker_ps")
 
 containers_total=0
 containers_healthy=0
+containers_no_healthcheck=0
 unhealthy_names=()
 if [ "$docker_ps_rc" -eq 0 ] && [ -n "$docker_ps" ]; then
   while IFS=$'\t' read -r name status; do
     [ -n "$name" ] || continue
     containers_total=$((containers_total + 1))
     case "$status" in
-      *"(healthy)"*) containers_healthy=$((containers_healthy + 1)) ;;
+      Up*"(healthy)"*) containers_healthy=$((containers_healthy + 1)) ;;
+      Up*"(unhealthy)"*|Up*"(health:"*) unhealthy_names+=("$name") ;;
+      Up*) containers_no_healthcheck=$((containers_no_healthcheck + 1)) ;;
       *) unhealthy_names+=("$name") ;;
     esac
   done <<< "$docker_ps"
@@ -124,14 +162,17 @@ fi
 if [ "$docker_ps_rc" -eq 0 ]; then
   echo "containers_total: $containers_total"
   echo "containers_healthy: $containers_healthy"
+  echo "containers_no_healthcheck: $containers_no_healthcheck"
   echo "containers_unhealthy_names: ${unhealthy_names[*]:-}"
 else
   echo 'containers_total: n/a'
   echo 'containers_healthy: n/a'
+  echo 'containers_no_healthcheck: n/a'
   echo 'containers_unhealthy_names: n/a'
 fi
 version_attention=false
 [ -z "$version_json" ] && version_attention=true
+[ "$have_jq" -eq 1 ] || version_attention=true
 [ "$docker_ps_rc" -ne 0 ] && version_attention=true
 [ "${#unhealthy_names[@]}" -gt 0 ] && version_attention=true
 echo "needs_attention: $version_attention"
@@ -139,22 +180,23 @@ echo
 
 # ---- P&L --------------------------------------------------------------------
 pnl_json=$(curl_get /api/v1/live/pnl) || { UNREACHABLE+=("http:pnl"); pnl_json=''; }
+pnl_attention=false
 echo '[pnl]'
-if [ -n "$pnl_json" ]; then
+if [ -n "$pnl_json" ] && [ "$have_jq" -eq 1 ]; then
   echo "realized_today: $(jqf "$pnl_json" '.realized_today')"
   echo "realized_all_time: $(jqf "$pnl_json" '.realized_all_time')"
   echo "unrealized: $(jqf "$pnl_json" '.unrealized')"
   echo "total: $(jqf "$pnl_json" '.total')"
   echo "day_change: $(jqf "$pnl_json" '.day_change')"
-  echo 'needs_attention: false'
 else
+  pnl_attention=true
   echo 'realized_today: n/a'
   echo 'realized_all_time: n/a'
   echo 'unrealized: n/a'
   echo 'total: n/a'
   echo 'day_change: n/a'
-  echo 'needs_attention: true'
 fi
+echo "needs_attention: $pnl_attention"
 echo
 
 # ---- trade placement audit ---------------------------------------------------
@@ -162,6 +204,13 @@ echo
 # no order_intent at all, or has an intent but no terminal order_event
 # (FILLED/CANCELLED/REJECTED) after $GRACE_MINUTES. Intentional non-placements
 # (skipped_*, shadow PASS/HOLD) are excluded - they are not bugs.
+#
+# Column order is load-bearing: every fixed-width field, including both
+# decisive booleans, is selected before the free-text status_reason, and
+# status_reason itself has its own field separator and newlines translated to
+# spaces. A broker rejection string can contain either, and without both
+# guards one such character would shift every later field left and silently
+# reclassify a real drop as clean.
 trade_audit=$(ssh_psql <<SQL
 WITH trade_decisions AS (
   SELECT ad.ticker, ad.action, ad.status, ad.status_reason, ad.created_at,
@@ -175,9 +224,10 @@ WITH trade_decisions AS (
     AND ad.status <> 'shadow'
     AND ad.created_at >= CURRENT_DATE
 )
-SELECT ticker, action, status, coalesce(status_reason,''), has_intent, coalesce(terminal_event,''),
+SELECT ticker, action, status, has_intent, coalesce(terminal_event,''),
   (status = 'submitted' AND NOT has_intent) AS drop_no_intent,
-  (has_intent AND terminal_event IS NULL AND created_at < now() - interval '$GRACE_MINUTES minutes') AS drop_no_terminal
+  (has_intent AND terminal_event IS NULL AND created_at < now() - interval '$GRACE_MINUTES minutes') AS drop_no_terminal,
+  translate(coalesce(status_reason,''), E'|\n\r', '   ')
 FROM trade_decisions
 ORDER BY created_at DESC;
 SQL
@@ -186,11 +236,12 @@ trade_audit_rc=$?
 [ "$trade_audit_rc" -eq 0 ] || UNREACHABLE+=("ssh:trade_audit")
 
 echo '[trades]'
+trades_attention=true
 if [ "$trade_audit_rc" -eq 0 ]; then
   decisions_checked=0
   silent_drops=0
   if [ -n "$trade_audit" ]; then
-    while IFS='|' read -r ticker action status reason has_intent terminal drop_no_intent drop_no_terminal; do
+    while IFS='|' read -r ticker action status has_intent terminal drop_no_intent drop_no_terminal reason; do
       [ -n "$ticker" ] || continue
       decisions_checked=$((decisions_checked + 1))
       if [ "$drop_no_intent" = t ] || [ "$drop_no_terminal" = t ]; then
@@ -204,12 +255,13 @@ if [ "$trade_audit_rc" -eq 0 ]; then
   fi
   echo "decisions_checked: $decisions_checked"
   echo "silent_drops: $silent_drops"
-  echo "needs_attention: $([ "$silent_drops" -gt 0 ] && echo true || echo false)"
+  trades_attention=false
+  [ "$silent_drops" -gt 0 ] && trades_attention=true
 else
   echo 'decisions_checked: n/a'
   echo 'silent_drops: n/a'
-  echo 'needs_attention: true'
 fi
+echo "needs_attention: $trades_attention"
 echo
 
 # ---- analysis cadence ---------------------------------------------------------
@@ -234,28 +286,43 @@ if [ "$cadence_rc" -eq 0 ] && [ -n "$cadence" ]; then
   echo "stuck_pending: $stuck_pending"
   analysis_attention=false
   { [ "${errored_pass_today:-0}" -gt 0 ] || [ "${stuck_pending:-0}" -gt 0 ]; } && analysis_attention=true
-  echo "needs_attention: $analysis_attention"
 else
   echo 'decisions_today: n/a'
   echo "decisions_per_day_${BASELINE_DAYS}d_baseline: n/a"
   echo 'errored_pass_today: n/a'
   echo 'stuck_pending: n/a'
-  echo 'needs_attention: true'
 fi
+echo "needs_attention: $analysis_attention"
 echo
 
 # ---- ops alerts / event stream / diagnoses -------------------------------------
 cutoff=$(date -u -v-"${ALERT_WINDOW_HOURS}"H +%Y-%m-%dT%H:%M:%S 2>/dev/null \
   || date -u -d "-${ALERT_WINDOW_HOURS} hours" +%Y-%m-%dT%H:%M:%S 2>/dev/null)
+[ -n "$cutoff" ] || UNREACHABLE+=("missing:date-cutoff")
 
 ops_json=$(curl_get /api/v1/debug/ops-alerts) || { UNREACHABLE+=("http:ops-alerts"); ops_json=''; }
 event_json=$(curl_get /api/v1/debug/event-stream) || { UNREACHABLE+=("http:event-stream"); event_json=''; }
 diag_json=$(curl_get /api/v1/debug/diagnoses) || { UNREACHABLE+=("http:diagnoses"); diag_json=''; }
 
+# A debug surface that answers `available:false` or carries an error is a
+# switched-off source, not a quiet one; drop its body so the section reads n/a
+# and the label lands in [sources] rather than rendering as zero alerts.
+if [ -n "$ops_json" ] && debug_off "$ops_json"; then
+  UNREACHABLE+=("debug:ops-alerts"); ops_json=''
+fi
+if [ -n "$event_json" ] && debug_off "$event_json"; then
+  UNREACHABLE+=("debug:event-stream"); event_json=''
+fi
+if [ -n "$diag_json" ] && debug_off "$diag_json"; then
+  UNREACHABLE+=("debug:diagnoses"); diag_json=''
+fi
+
 echo '[alerts]'
 alert_count=0
 recovery_count=0
+alerts_readable=0
 if [ -n "$ops_json" ] && [ "$have_jq" -eq 1 ] && [ -n "$cutoff" ]; then
+  alerts_readable=1
   while IFS=$'\t' read -r severity event_type headline; do
     [ -n "$severity" ] || continue
     if [ "$severity" = alert ]; then
@@ -287,7 +354,11 @@ else
   echo 'diagnoses_count: n/a'
 fi
 alerts_attention=false
-{ [ -z "$ops_json" ] || [ "$alert_count" -gt 0 ]; } && alerts_attention=true
+[ "$alerts_readable" -eq 1 ] || alerts_attention=true
+if [ -z "$event_json" ] || [ -z "$diag_json" ] || [ "$have_jq" -ne 1 ]; then
+  alerts_attention=true
+fi
+[ "$alert_count" -gt 0 ] && alerts_attention=true
 echo "needs_attention: $alerts_attention"
 echo
 
@@ -324,25 +395,22 @@ if [ "$hygiene_rc" -eq 0 ] && [ -n "$hygiene" ]; then
   hygiene_attention=false
   { [ "${orphan_no_intent:-0}" -gt 0 ] || [ "${orphan_stuck:-0}" -gt 0 ] \
     || [ "${over_closed_lots:-0}" -gt 0 ] || [ "${close_without_fill:-0}" -gt 0 ]; } && hygiene_attention=true
-  echo "needs_attention: $hygiene_attention"
 else
   echo "orphan_no_intent_${HYGIENE_DAYS}d: n/a"
   echo "orphan_stuck_${HYGIENE_DAYS}d: n/a"
   echo 'over_closed_lots: n/a'
   echo 'close_without_fill: n/a'
-  echo 'needs_attention: true'
 fi
+echo "needs_attention: $hygiene_attention"
 echo
 
 # ---- verdict ----------------------------------------------------------------
-trades_attention=false
-if [ "${trade_audit_rc:-1}" -ne 0 ] || [ "${silent_drops:-0}" -gt 0 ]; then
-  trades_attention=true
-fi
-
+# Each section already decided and printed its own needs_attention above; the
+# rollup only reads those variables, so a threshold can never be expressed
+# twice and drift between a section line and this list.
 sections_attention=()
 [ "$version_attention" = true ] && sections_attention+=(version)
-[ -n "$pnl_json" ] || sections_attention+=(pnl)
+[ "$pnl_attention" = true ] && sections_attention+=(pnl)
 [ "$trades_attention" = true ] && sections_attention+=(trades)
 [ "$analysis_attention" = true ] && sections_attention+=(analysis)
 [ "$alerts_attention" = true ] && sections_attention+=(alerts)

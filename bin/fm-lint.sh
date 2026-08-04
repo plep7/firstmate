@@ -8,6 +8,10 @@
 # Tests stop source analysis at imported production modules because every
 # production shell is already a canonical, source-aware root of this same run.
 #
+# The canonical set is bin/*.sh, bin/backends/*.sh, tests/*.sh, and the shell
+# colocated inside skill directories (.agents/skills/*/*.sh), so a script that
+# ships with a skill is linted by exactly the same gate as bin/ shell.
+#
 # Canonical lint defaults to two bounded workers over two stable logical shards.
 # Each shard writes separate diagnostics, and the parent replays those outputs in
 # deterministic shard and root order after every worker finishes. FM_LINT_JOBS=1
@@ -84,7 +88,7 @@ if [ "${1:-}" = "--required-version" ]; then
 fi
 
 fm_lint_usage() {
-  sed -n '2,26{s/^# \{0,1\}//;p;}' "$SELF"
+  sed -n '2,30{s/^# \{0,1\}//;p;}' "$SELF"
 }
 
 JOBS=${FM_LINT_JOBS:-2}
@@ -135,6 +139,12 @@ if [ "$#" -gt 0 ]; then
   ROOTS=("$@")
 else
   ROOTS=(bin/*.sh bin/backends/*.sh tests/*.sh)
+  # Skill-colocated shell joins the same canonical set. Globbed and existence
+  # filtered rather than hardcoded, so a skill directory with no script (or a
+  # newly added one) never turns the file-set definition into a literal path.
+  for skill_shell in .agents/skills/*/*.sh; do
+    [ -f "$skill_shell" ] && ROOTS+=("$skill_shell")
+  done
 fi
 ROOT_COUNT=${#ROOTS[@]}
 
